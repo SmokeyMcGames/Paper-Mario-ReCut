@@ -4,6 +4,11 @@ Paper Mario ReCut is a native PC recompilation project for Paper Mario on Ninten
 
 This repository does not include ROM files, extracted ROM assets, save files, or generated ROM-derived recomp output. The app prompts for a legally dumped Paper Mario (U) ROM on first run and installs a local validated copy into that user's own `user` folder.
 
+## Runtime Notes
+
+- Press F1 in-game to show or hide the early Windows menu bar for File, Graphics, and Controls.
+- Press F10 in-game to show or hide the VI/FPS counter.
+
 ## Legal ROM Requirement
 
 You must provide your own legally dumped Paper Mario (U) ROM. Do not commit or distribute ROMs, save files, generated ROM output, or local `user` folders.
