@@ -1,0 +1,25 @@
+# Build outputs
+build/
+build-*/
+
+# Local runtime data. This can contain installed ROMs and saves.
+user/
+**/user/
+
+# Generated from a user-provided ROM. Keep local, never publish.
+generated/paper_mario_recomp_out/
+
+# Never commit ROMs or cartridge save data.
+*.z64
+*.n64
+*.v64
+*.rom
+*.sra
+*.fla
+*.eep
+
+# Local smoke-test captures and logs
+*.log
+*.wav
+capture_live.py
+video_frames/
