@@ -1,1 +1,2 @@
 IDI_APP_ICON ICON "../assets/CutMar.ico"
+#include "builtin_texture_resources.rc"

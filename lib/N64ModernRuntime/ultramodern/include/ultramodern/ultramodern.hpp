@@ -94,6 +94,7 @@ uint64_t get_presented_frame_count();
 float get_resolution_scale();
 void trigger_config_action();
 void set_startup_texture_replacement_directory(const std::filesystem::path& directory);
+std::filesystem::path get_startup_texture_replacement_directory();
 void load_texture_replacements(const std::filesystem::path& directory);
 void clear_texture_replacements();
 void start_texture_dumping(const std::filesystem::path& directory);

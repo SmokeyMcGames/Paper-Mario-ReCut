@@ -31,6 +31,7 @@
 
 #include "librecomp/game.hpp"
 #include "librecomp/rsp.hpp"
+#include "builtin_texture_pack.h"
 #include "paper_rt64_context.h"
 #include "ultramodern/ultra64.h"
 #include "ultramodern/ultramodern.hpp"
@@ -80,6 +81,7 @@ namespace {
     std::filesystem::path app_base_path();
     std::filesystem::path app_executable_path();
     std::filesystem::path texture_root_path();
+    std::filesystem::path texture_builtin_path();
     std::filesystem::path texture_replacement_path();
     std::filesystem::path texture_dump_path();
     bool ensure_texture_folder_layout();
@@ -567,7 +569,7 @@ namespace {
             }
 
             const bool loaded = ultramodern::is_texture_replacement_loaded();
-            const wchar_t* status = L"Live replacement off. Originals are not auto-loaded.";
+            const wchar_t* status = L"Built-in ReCut textures active. Live replacements off.";
             if (texture_live_replacement_enabled && loaded) {
                 status = L"Live replacement on. Watching replacements folder.";
             }
@@ -615,7 +617,7 @@ namespace {
                 hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
 
             texture_status_label = CreateWindowExW(
-                0, L"STATIC", L"Live replacement off. Originals are not auto-loaded.",
+                0, L"STATIC", L"Built-in ReCut textures active. Live replacements off.",
                 WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
                 20, 122, 380, 38,
                 hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -1365,6 +1367,10 @@ namespace {
         return app_base_path() / "textures";
     }
 
+    std::filesystem::path texture_builtin_path() {
+        return app_config_path() / "builtin_textures";
+    }
+
     std::filesystem::path texture_replacement_path() {
         return texture_root_path() / "replacements";
     }
@@ -1614,6 +1620,13 @@ int main(int argc, char** argv) {
     if (!ensure_rom_installed(argc, argv, game_id)) {
         return EXIT_FAILURE;
     }
+
+    const std::filesystem::path builtin_textures_path = texture_builtin_path();
+    if (!paper_mario::ensure_builtin_texture_pack(builtin_textures_path)) {
+        show_message("Paper Mario ReCut could not prepare its built-in texture pack.");
+        return EXIT_FAILURE;
+    }
+    ultramodern::set_startup_texture_replacement_directory(builtin_textures_path);
 
     recomp::rsp::callbacks_t rsp_callbacks{
         .get_rsp_microcode = get_rsp_microcode,

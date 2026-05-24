@@ -53,6 +53,7 @@ target_include_directories(RecompiledFuncs PRIVATE
 )
 
 add_executable(PaperMarioReCut
+    src/builtin_texture_pack.cpp
     src/main.cpp
     src/paper_rt64_context.cpp
     src/paper_stubs.cpp

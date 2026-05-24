@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #include <Unknwn.h>
@@ -244,6 +245,8 @@ namespace {
                 app.reset();
                 return;
             }
+
+            default_texture_replacement_directory = ultramodern::get_startup_texture_replacement_directory();
         }
 
         bool valid() override {
@@ -313,11 +316,29 @@ namespace {
                 return false;
             }
 
-            const bool loaded = app->textureCache->loadReplacementDirectory(RT64::ReplacementDirectory(directory));
+            const bool loading_default_only = same_texture_directory(directory, default_texture_replacement_directory);
+            std::vector<RT64::ReplacementDirectory> directories;
+            add_replacement_directory_if_valid(directories, default_texture_replacement_directory);
+            if (!loading_default_only) {
+                add_replacement_directory_if_valid(directories, directory);
+            }
+
+            if (directories.empty()) {
+                return false;
+            }
+
+            const bool loaded = app->textureCache->loadReplacementDirectories(directories);
             if (loaded) {
-                texture_replacement_directory = directory;
-                texture_replacement_write_time = latest_texture_replacement_write_time(directory);
-                next_texture_replacement_scan = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
+                if (loading_default_only) {
+                    texture_replacement_directory.clear();
+                    texture_replacement_write_time = {};
+                    next_texture_replacement_scan = {};
+                }
+                else {
+                    texture_replacement_directory = directory;
+                    texture_replacement_write_time = latest_texture_replacement_write_time(directory);
+                    next_texture_replacement_scan = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
+                }
             }
 
             return loaded;
@@ -325,7 +346,12 @@ namespace {
 
         void clear_texture_replacements() override {
             if (app && app->textureCache) {
-                app->textureCache->clearReplacementDirectories();
+                if (!default_texture_replacement_directory.empty() && std::filesystem::is_directory(default_texture_replacement_directory)) {
+                    app->textureCache->loadReplacementDirectory(RT64::ReplacementDirectory(default_texture_replacement_directory));
+                }
+                else {
+                    app->textureCache->clearReplacementDirectories();
+                }
             }
 
             texture_replacement_directory.clear();
@@ -357,6 +383,23 @@ namespace {
         }
 
     private:
+        static bool same_texture_directory(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
+            if (lhs.empty() || rhs.empty()) {
+                return false;
+            }
+
+            std::error_code error;
+            const bool same = std::filesystem::equivalent(lhs, rhs, error);
+            return !error && same;
+        }
+
+        static void add_replacement_directory_if_valid(std::vector<RT64::ReplacementDirectory>& directories, const std::filesystem::path& directory) {
+            std::error_code error;
+            if (!directory.empty() && std::filesystem::is_directory(directory, error) && !error) {
+                directories.emplace_back(RT64::ReplacementDirectory(directory));
+            }
+        }
+
         void poll_texture_replacement_changes() {
             if (!app || !app->textureCache || texture_replacement_directory.empty()) {
                 return;
@@ -379,6 +422,7 @@ namespace {
 
         std::unique_ptr<RT64::Application> app;
         std::filesystem::path texture_replacement_directory;
+        std::filesystem::path default_texture_replacement_directory;
         std::filesystem::file_time_type texture_replacement_write_time{};
         std::chrono::steady_clock::time_point next_texture_replacement_scan{};
     };

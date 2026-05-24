@@ -353,6 +353,10 @@ void ultramodern::set_startup_texture_replacement_directory(const std::filesyste
     startup_texture_replacement_directory = directory;
 }
 
+std::filesystem::path ultramodern::get_startup_texture_replacement_directory() {
+    return startup_texture_replacement_directory;
+}
+
 void ultramodern::load_texture_replacements(const std::filesystem::path& directory) {
     events_context.action_queue.enqueue(LoadTextureReplacementsAction{ directory });
 }
