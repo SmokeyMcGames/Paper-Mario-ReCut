@@ -3657,7 +3657,7 @@ namespace RT64 {
 
         // Create the logical device with the desired family queues.
         std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
-        std::vector<float> queuePriorities(MaxQueuesPerFamilyCount, 1.0f);
+        std::vector<float> queuePriorities(MaxQueuesPerFamilyCount, 0.25f);
         queueCreateInfos.reserve(queueFamilyCount);
         for (uint32_t i = 0; i < queueFamilyCount; i++) {
             if (queueFamilyUsed[i]) {
