@@ -3139,7 +3139,6 @@ namespace {
 int main(int argc, char** argv) {
 #ifdef _WIN32
     SetUnhandledExceptionFilter(crash_handler);
-    SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
     timeBeginPeriod(1);
     SDL_setenv("SDL_AUDIODRIVER", "wasapi", true);
 #endif
