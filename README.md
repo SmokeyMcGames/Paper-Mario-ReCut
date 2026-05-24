@@ -1,16 +1,8 @@
 # Paper Mario ReCut
 
-Paper Mario ReCut is an experimental native PC recompilation project for Paper Mario on Nintendo 64.
+Paper Mario ReCut is a native PC recompilation project for Paper Mario on Nintendo 64.
 
 This repository does not include ROM files, extracted ROM assets, save files, or generated ROM-derived recomp output. The app prompts for a legally dumped Paper Mario (U) ROM on first run and installs a local validated copy into that user's own `user` folder.
-
-## Current Status
-
-- Windows build target: `PaperMarioReCut.exe`
-- Renderer: RT64
-- Input/audio/windowing: SDL2
-- First-run ROM picker and validation are built in
-- The project icon is `assets/CutMar.ico`
 
 ## Legal ROM Requirement
 
