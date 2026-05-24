@@ -3,9 +3,11 @@
 #include <cassert>
 #include <chrono>
 #include <atomic>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cwchar>
 #include <fstream>
 #include <filesystem>
 #include <optional>
@@ -21,8 +23,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <DbgHelp.h>
+#include <CommCtrl.h>
 #include <commdlg.h>
 #include <timeapi.h>
+#include <uxtheme.h>
 #endif
 
 #include "librecomp/game.hpp"
@@ -69,6 +73,7 @@ namespace {
     constexpr uint32_t duplicated_input_frames = 4;
     uint32_t discarded_output_frames = 0;
     constexpr uint32_t bytes_per_input_frame = input_channels * sizeof(float);
+    std::atomic_bool texture_dump_input_paused = false;
 
     void show_message(const char* msg);
     void show_info_message(const char* msg);
@@ -91,8 +96,12 @@ namespace {
     bool fps_overlay_enabled = false;
     HWND texture_replacement_window = nullptr;
     HWND texture_live_replacement_checkbox = nullptr;
+    HWND texture_dump_button = nullptr;
+    HWND texture_dump_progress = nullptr;
     HWND texture_status_label = nullptr;
     bool texture_live_replacement_enabled = false;
+    bool texture_dump_pass_active = false;
+    std::chrono::steady_clock::time_point texture_dump_pass_started = std::chrono::steady_clock::now();
     std::atomic<uint32_t> fps_vi_ticks{0};
     uint64_t fps_last_presented_frames = 0;
     std::chrono::steady_clock::time_point fps_last_sample = std::chrono::steady_clock::now();
@@ -113,8 +122,11 @@ namespace {
     constexpr UINT_PTR texture_command_live_replacement = 40100;
     constexpr UINT_PTR texture_command_reload = 40101;
     constexpr UINT_PTR texture_command_open_folder = 40102;
+    constexpr UINT_PTR texture_command_dump_textures = 40103;
+    constexpr UINT_PTR texture_dump_timer = 40200;
 
     constexpr uint8_t menu_hint_max_alpha = 220;
+    constexpr double texture_dump_pass_seconds = 8.0;
     constexpr double menu_hint_fade_in_seconds = 0.35;
     constexpr double menu_hint_hold_seconds = 3.0;
     constexpr double menu_hint_fade_out_seconds = 0.65;
@@ -128,6 +140,7 @@ namespace {
     void show_texture_replacement_window();
     void destroy_texture_replacement_window();
     void refresh_texture_replacement_window();
+    void update_texture_dump_progress();
     bool handle_menu_command(UINT_PTR command, HWND hwnd);
 
     void restart_application() {
@@ -366,6 +379,120 @@ namespace {
         app_menu_bar_visible = false;
     }
 
+    bool is_texture_png_file(const std::filesystem::path& path) {
+        std::string extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return extension == ".png";
+    }
+
+    size_t count_dumped_texture_pngs() {
+        std::error_code error;
+        const std::filesystem::path directory = texture_dump_path();
+        if (!std::filesystem::is_directory(directory, error) || error) {
+            return 0;
+        }
+
+        size_t count = 0;
+        std::filesystem::recursive_directory_iterator iterator(
+            directory,
+            std::filesystem::directory_options::skip_permission_denied,
+            error);
+        const std::filesystem::recursive_directory_iterator end;
+        while (!error && iterator != end) {
+            if (iterator->is_regular_file(error) && !error && is_texture_png_file(iterator->path())) {
+                count++;
+            }
+            iterator.increment(error);
+        }
+
+        return count;
+    }
+
+    void set_texture_status_text(const wchar_t* text) {
+        if (texture_status_label) {
+            SetWindowTextW(texture_status_label, text);
+        }
+    }
+
+    void stop_texture_dump_pass(const wchar_t* status_text) {
+        if (!texture_dump_pass_active) {
+            return;
+        }
+
+        texture_dump_pass_active = false;
+        texture_dump_input_paused.store(false, std::memory_order_relaxed);
+        ultramodern::stop_texture_dumping();
+
+        if (texture_dump_progress) {
+            SendMessageW(texture_dump_progress, PBM_SETPOS, 100, 0);
+            ShowWindow(texture_dump_progress, SW_HIDE);
+        }
+        if (texture_dump_button) {
+            EnableWindow(texture_dump_button, TRUE);
+            SetWindowTextW(texture_dump_button, L"Dump Textures");
+        }
+        if (texture_replacement_window) {
+            KillTimer(texture_replacement_window, texture_dump_timer);
+        }
+
+        set_texture_status_text(status_text);
+    }
+
+    void start_texture_dump_pass() {
+        if (texture_dump_pass_active) {
+            return;
+        }
+
+        if (!ensure_texture_folder_layout()) {
+            show_message("Paper Mario ReCut could not prepare the texture dump folder.");
+            return;
+        }
+
+        texture_dump_pass_active = true;
+        texture_dump_input_paused.store(true, std::memory_order_relaxed);
+        texture_dump_pass_started = std::chrono::steady_clock::now();
+        ultramodern::start_texture_dumping(texture_dump_path());
+
+        if (texture_dump_progress) {
+            SendMessageW(texture_dump_progress, PBM_SETRANGE32, 0, 100);
+            SendMessageW(texture_dump_progress, PBM_SETPOS, 0, 0);
+            ShowWindow(texture_dump_progress, SW_SHOW);
+        }
+        if (texture_dump_button) {
+            EnableWindow(texture_dump_button, FALSE);
+            SetWindowTextW(texture_dump_button, L"Dumping...");
+        }
+        if (texture_replacement_window) {
+            SetTimer(texture_replacement_window, texture_dump_timer, 100, nullptr);
+        }
+
+        set_texture_status_text(L"Dumping current scene textures...");
+    }
+
+    void update_texture_dump_progress() {
+        if (!texture_dump_pass_active) {
+            return;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        const double elapsed = std::chrono::duration<double>(now - texture_dump_pass_started).count();
+        const int percent = std::clamp(static_cast<int>((elapsed / texture_dump_pass_seconds) * 100.0), 0, 100);
+        if (texture_dump_progress) {
+            SendMessageW(texture_dump_progress, PBM_SETPOS, percent, 0);
+        }
+
+        wchar_t status[160] = {};
+        const size_t dumped_count = count_dumped_texture_pngs();
+        swprintf_s(status, L"Dumping current scene textures... %d%% (%zu PNGs)", percent, dumped_count);
+        set_texture_status_text(status);
+
+        if (elapsed >= texture_dump_pass_seconds) {
+            stop_texture_dump_pass(L"Dump pass complete. Copy PNGs from dumps to replacements to edit.");
+        }
+    }
+
     void reload_texture_replacement_folder() {
         const std::filesystem::path directory = texture_replacement_path();
         if (!ensure_texture_folder_layout()) {
@@ -435,6 +562,10 @@ namespace {
         }
 
         if (texture_status_label) {
+            if (texture_dump_pass_active) {
+                return;
+            }
+
             const bool loaded = ultramodern::is_texture_replacement_loaded();
             const wchar_t* status = L"Live replacement off. Originals are not auto-loaded.";
             if (texture_live_replacement_enabled && loaded) {
@@ -451,38 +582,71 @@ namespace {
         switch (message) {
         case WM_CREATE: {
             HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+            EnableThemeDialogTexture(hwnd, ETDT_ENABLETAB);
 
             texture_live_replacement_checkbox = CreateWindowExW(
                 0, L"BUTTON", L"Live Texture Replacement",
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                18, 18, 230, 24,
+                20, 18, 240, 24,
                 hwnd, reinterpret_cast<HMENU>(texture_command_live_replacement), GetModuleHandleW(nullptr), nullptr);
+
+            texture_dump_button = CreateWindowExW(
+                0, L"BUTTON", L"Dump Textures",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                20, 56, 122, 30,
+                hwnd, reinterpret_cast<HMENU>(texture_command_dump_textures), GetModuleHandleW(nullptr), nullptr);
 
             HWND reload_button = CreateWindowExW(
                 0, L"BUTTON", L"Reload Folder",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                18, 56, 126, 28,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                152, 56, 122, 30,
                 hwnd, reinterpret_cast<HMENU>(texture_command_reload), GetModuleHandleW(nullptr), nullptr);
 
             HWND open_button = CreateWindowExW(
                 0, L"BUTTON", L"Open Folder",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                154, 56, 116, 28,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                284, 56, 104, 30,
                 hwnd, reinterpret_cast<HMENU>(texture_command_open_folder), GetModuleHandleW(nullptr), nullptr);
+
+            texture_dump_progress = CreateWindowExW(
+                0, PROGRESS_CLASSW, nullptr,
+                WS_CHILD | PBS_SMOOTH,
+                20, 98, 368, 18,
+                hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
 
             texture_status_label = CreateWindowExW(
                 0, L"STATIC", L"Live replacement off. Originals are not auto-loaded.",
-                WS_CHILD | WS_VISIBLE | SS_LEFT,
-                18, 98, 380, 24,
+                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
+                20, 122, 380, 38,
                 hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
 
+            SetWindowTheme(texture_live_replacement_checkbox, L"Explorer", nullptr);
+            SetWindowTheme(texture_dump_button, L"Explorer", nullptr);
+            SetWindowTheme(reload_button, L"Explorer", nullptr);
+            SetWindowTheme(open_button, L"Explorer", nullptr);
+            SetWindowTheme(texture_dump_progress, L"Explorer", nullptr);
             SendMessageW(texture_live_replacement_checkbox, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            SendMessageW(texture_dump_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(reload_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(open_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(texture_status_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            SendMessageW(texture_dump_progress, PBM_SETRANGE32, 0, 100);
+            ShowWindow(texture_dump_progress, texture_dump_pass_active ? SW_SHOW : SW_HIDE);
             refresh_texture_replacement_window();
             return 0;
         }
+        case WM_CTLCOLORSTATIC: {
+            HDC dc = reinterpret_cast<HDC>(wparam);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+        }
+        case WM_TIMER:
+            if (wparam == texture_dump_timer) {
+                update_texture_dump_progress();
+                return 0;
+            }
+            break;
         case WM_COMMAND:
             switch (LOWORD(wparam)) {
             case texture_command_live_replacement:
@@ -492,6 +656,9 @@ namespace {
                     return 0;
                 }
                 break;
+            case texture_command_dump_textures:
+                start_texture_dump_pass();
+                return 0;
             case texture_command_reload:
                 reload_texture_replacement_folder();
                 return 0;
@@ -504,8 +671,11 @@ namespace {
             ShowWindow(hwnd, SW_HIDE);
             return 0;
         case WM_DESTROY:
+            KillTimer(hwnd, texture_dump_timer);
             texture_replacement_window = nullptr;
             texture_live_replacement_checkbox = nullptr;
+            texture_dump_button = nullptr;
+            texture_dump_progress = nullptr;
             texture_status_label = nullptr;
             return 0;
         }
@@ -535,7 +705,7 @@ namespace {
             RECT owner_rect{};
             GetWindowRect(main_window, &owner_rect);
             constexpr int dialog_width = 420;
-            constexpr int dialog_height = 170;
+            constexpr int dialog_height = 210;
             const int owner_width = static_cast<int>(owner_rect.right - owner_rect.left);
             const int owner_height = static_cast<int>(owner_rect.bottom - owner_rect.top);
             const int x = static_cast<int>(owner_rect.left) + std::max(0, (owner_width - dialog_width) / 2);
@@ -564,6 +734,8 @@ namespace {
             texture_replacement_window = nullptr;
         }
         texture_live_replacement_checkbox = nullptr;
+        texture_dump_button = nullptr;
+        texture_dump_progress = nullptr;
         texture_status_label = nullptr;
     }
 
@@ -835,6 +1007,11 @@ namespace {
             std::exit(EXIT_FAILURE);
         }
 #ifdef _WIN32
+        INITCOMMONCONTROLSEX controls{};
+        controls.dwSize = sizeof(controls);
+        controls.dwICC = ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS;
+        InitCommonControlsEx(&controls);
+        SetThemeAppProperties(STAP_ALLOW_NONCLIENT | STAP_ALLOW_CONTROLS | STAP_ALLOW_WEBCONTENT);
         SDL_EventState(SDL_SYSWMEVENT, SDL_ENABLE);
 #endif
 
@@ -1069,6 +1246,13 @@ namespace {
     bool get_input(int controller_num, uint16_t* buttons, float* x, float* y) {
         if (controller_num != 0) {
             return false;
+        }
+
+        if (texture_dump_input_paused.load(std::memory_order_relaxed)) {
+            *buttons = 0;
+            *x = 0.0f;
+            *y = 0.0f;
+            return true;
         }
 
         uint16_t out_buttons = 0;

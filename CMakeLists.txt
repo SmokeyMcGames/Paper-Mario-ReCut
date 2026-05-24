@@ -80,7 +80,11 @@ target_compile_options(PaperMarioReCut PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/bigobj>
 )
 if (MSVC)
-    target_link_options(PaperMarioReCut PRIVATE /DEBUG /MAP)
+    target_link_options(PaperMarioReCut PRIVATE
+        /DEBUG
+        /MAP
+        "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/PaperMarioReCut.exe.manifest"
+    )
 endif()
 
 if (WIN32)
@@ -93,7 +97,7 @@ if (WIN32)
     FetchContent_MakeAvailable(sdl2)
     target_include_directories(PaperMarioReCut PRIVATE "${sdl2_SOURCE_DIR}/include")
     target_link_directories(PaperMarioReCut PRIVATE "${sdl2_SOURCE_DIR}/lib/x64")
-    target_link_libraries(PaperMarioReCut PRIVATE SDL2 Winmm.lib Dbghelp.lib Comdlg32.lib)
+    target_link_libraries(PaperMarioReCut PRIVATE SDL2 Winmm.lib Dbghelp.lib Comdlg32.lib Comctl32.lib UxTheme.lib)
     add_custom_command(TARGET PaperMarioReCut POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${sdl2_SOURCE_DIR}/lib/x64/SDL2.dll"

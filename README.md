@@ -10,7 +10,7 @@ This repository does not include ROM files, extracted ROM assets, save files, or
 - Press F8 in-game to open Texture Replacement. Live Texture Replacement loads edited PNG/DDS files from `textures/replacements/` and hot-reloads them while enabled.
 - Press F10 in-game to show or hide the VI/FPS counter.
 
-Texture replacement folders are local runtime data. Original dumps belong under `textures/dumps/`, replacement packs belong under `textures/replacements/`, and only the replacement folder is loaded by the live replacement toggle. Hash-named PNG/DDS files copied into `textures/replacements/` can be hot-loaded without hand-editing `rt64.json`. Keep texture packs, dumped PNGs, ROM files, and the `user` folder out of commits unless a future legal texture pack is intentionally authored from scratch.
+Texture replacement folders are local runtime data. Original dumps belong under `textures/dumps/`, replacement packs belong under `textures/replacements/`, and only the replacement folder is loaded by the live replacement toggle. The Dump Textures button performs a short current-scene dump pass while game input is held, then writes editable PNGs under `textures/dumps/`. Hash-named PNG/DDS files copied into `textures/replacements/` can be hot-loaded without hand-editing `rt64.json`. Keep texture packs, dumped PNGs, ROM files, and the `user` folder out of commits unless a future legal texture pack is intentionally authored from scratch.
 
 ## Legal ROM Requirement
 
