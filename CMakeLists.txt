@@ -62,6 +62,10 @@ add_executable(PaperMarioReCut
     rsp/n_aspMain.cpp
 )
 
+if (WIN32)
+    set_target_properties(PaperMarioReCut PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
+
 target_include_directories(PaperMarioReCut PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${PM_RECOMP_OUT}"
@@ -82,6 +86,8 @@ target_compile_options(PaperMarioReCut PRIVATE
 )
 if (MSVC)
     target_link_options(PaperMarioReCut PRIVATE
+        /SUBSYSTEM:WINDOWS
+        /ENTRY:mainCRTStartup
         /DEBUG
         /MAP
         "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/PaperMarioReCut.exe.manifest"
