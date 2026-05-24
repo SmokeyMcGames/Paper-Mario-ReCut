@@ -237,6 +237,7 @@ namespace {
         app->userConfig.internalColorFormat = to_rt64(config.hpfb_option);
         app->userConfig.displayBuffering = to_rt64(config.display_buffering);
         app->userConfig.hardwareResolve = to_rt64(config.hardware_resolve);
+        app->userConfig.idleWorkActive = false;
 
         switch (config.api_option) {
         case ultramodern::renderer::GraphicsApi::D3D12:

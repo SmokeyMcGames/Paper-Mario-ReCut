@@ -523,9 +523,6 @@ namespace {
         AppendMenuW(graphics_menu, MF_STRING, menu_command_graphics_options, L"&Graphics Options...");
         AppendMenuW(graphics_menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(graphics_menu, MF_STRING, menu_command_texture_replacement, L"&Texture Replacement...");
-        AppendMenuW(graphics_menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(graphics_menu, MF_STRING, menu_command_fullscreen, L"&Fullscreen...");
-        AppendMenuW(graphics_menu, MF_STRING, menu_command_resolution, L"&Resolution / Scaling...");
         AppendMenuW(app_menu_bar, MF_POPUP, reinterpret_cast<UINT_PTR>(graphics_menu), L"&Graphics");
 
         HMENU audio_menu = CreatePopupMenu();
@@ -534,8 +531,6 @@ namespace {
 
         HMENU controls_menu = CreatePopupMenu();
         AppendMenuW(controls_menu, MF_STRING, menu_command_controller_setup, L"&Controller Setup...");
-        AppendMenuW(controls_menu, MF_STRING, menu_command_rebind_keys, L"&Rebind Keys...");
-        AppendMenuW(controls_menu, MF_STRING, menu_command_input_profiles, L"&Input Profiles...");
         AppendMenuW(app_menu_bar, MF_POPUP, reinterpret_cast<UINT_PTR>(controls_menu), L"&Controls");
     }
 
