@@ -15,6 +15,7 @@ namespace RT64 {
     struct TextureManager {
         std::set<uint64_t> hashSet;
         std::set<uint64_t> dumpedSet;
+        uint32_t dumpSequence = 0;
 
         void uploadEmpty(State *state, TextureCache *textureCache, uint64_t creationFrame, uint16_t width, uint16_t height, uint64_t replacementHash);
         uint64_t uploadTMEM(State *state, const LoadTile &loadTile, TextureCache *textureCache, uint64_t creationFrame, uint16_t byteOffset, uint16_t byteCount, uint16_t width, uint16_t height, uint32_t tlut);

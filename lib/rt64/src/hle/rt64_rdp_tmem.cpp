@@ -36,54 +36,10 @@ namespace RT64 {
             return std::string(baseName);
         }
 
-        std::string textureFormatName(const LoadTile &loadTile, uint32_t tlut) {
-            const char *fmtName = "unknown";
-            switch (loadTile.fmt) {
-            case G_IM_FMT_RGBA:
-                fmtName = "rgba";
-                break;
-            case G_IM_FMT_YUV:
-                fmtName = "yuv";
-                break;
-            case G_IM_FMT_CI:
-                fmtName = "ci";
-                break;
-            case G_IM_FMT_IA:
-                fmtName = "ia";
-                break;
-            case G_IM_FMT_I:
-                fmtName = "i";
-                break;
-            case G_IM_FMT_DEPTH:
-                fmtName = "depth";
-                break;
-            }
-
-            const char *sizName = "unknown";
-            switch (loadTile.siz) {
-            case G_IM_SIZ_4b:
-                sizName = "4b";
-                break;
-            case G_IM_SIZ_8b:
-                sizName = "8b";
-                break;
-            case G_IM_SIZ_16b:
-                sizName = "16b";
-                break;
-            case G_IM_SIZ_32b:
-                sizName = "32b";
-                break;
-            }
-
-            std::string name = std::string(fmtName) + "_" + sizName;
-            if (tlut == G_TT_RGBA16) {
-                name += "_tlut_rgba16";
-            }
-            else if (tlut == G_TT_IA16) {
-                name += "_tlut_ia16";
-            }
-
-            return name;
+        std::string orderedDumpBaseName(uint32_t sequence, uint64_t hash) {
+            char baseName[80];
+            snprintf(baseName, sizeof(baseName), "%06u_%016" PRIx64 ".v%u", sequence, hash, TMEMHasher::CurrentHashVersion);
+            return std::string(baseName);
         }
 
         std::filesystem::path replacementTextureFolder(const LoadTile &loadTile, uint32_t tlut) {
@@ -270,42 +226,12 @@ namespace RT64 {
             return true;
         }
 
-        void dumpTextureMetadata(const std::filesystem::path &metadataPath, uint64_t hash, const LoadTile &loadTile, uint16_t width, uint16_t height, uint32_t tlut) {
-            if (std::filesystem::exists(metadataPath)) {
-                return;
-            }
-
-            std::ofstream metadataStream(metadataPath);
-            if (!metadataStream.is_open()) {
-                return;
-            }
-
-            json jroot;
-            const std::filesystem::path folder = replacementTextureFolder(loadTile, tlut);
-            const auto category = folder.begin();
-            jroot["hash"] = ReplacementDatabase::hashToString(hash);
-            jroot["hashVersion"] = TMEMHasher::CurrentHashVersion;
-            jroot["category"] = (category != folder.end()) ? category->u8string() : "misc";
-            jroot["object"] = "unassigned";
-            jroot["format"] = textureFormatName(loadTile, tlut);
-            jroot["width"] = width;
-            jroot["height"] = height;
-            jroot["tile"] = loadTile;
-            if (tlut == G_TT_RGBA16) {
-                jroot["tlut"] = LoadTLUT::RGBA16;
-            }
-            else if (tlut == G_TT_IA16) {
-                jroot["tlut"] = LoadTLUT::IA16;
-            }
-            else {
-                jroot["tlut"] = LoadTLUT::None;
-            }
-
-            metadataStream << std::setw(4) << jroot << std::endl;
+        bool hasHashInFilename(const std::string &fileName, uint64_t hash) {
+            return fileName.find(ReplacementDatabase::hashToString(hash)) != std::string::npos;
         }
 
-        void dumpTexturePNG(const std::filesystem::path &directory, uint64_t hash, State *state, const LoadTile &loadTile, uint16_t width, uint16_t height, uint32_t tlut) {
-            const std::string baseName = replacementBaseName(hash);
+        void dumpTexturePNG(const std::filesystem::path &directory, uint32_t sequence, uint64_t hash, State *state, const LoadTile &loadTile, uint16_t width, uint16_t height, uint32_t tlut) {
+            const std::string baseName = orderedDumpBaseName(sequence, hash);
             const std::filesystem::path textureFolder = directory / replacementTextureFolder(loadTile, tlut);
             std::error_code error;
             std::filesystem::create_directories(textureFolder, error);
@@ -314,10 +240,26 @@ namespace RT64 {
             }
 
             const std::filesystem::path pngPath = textureFolder / (baseName + ".png");
-            const std::filesystem::path metadataPath = textureFolder / (baseName + ".texture.json");
-            dumpTextureMetadata(metadataPath, hash, loadTile, width, height, tlut);
             if (std::filesystem::exists(pngPath)) {
                 return;
+            }
+
+            std::filesystem::directory_iterator iterator(textureFolder, error);
+            const std::filesystem::directory_iterator end;
+            while (!error && (iterator != end)) {
+                if (iterator->is_regular_file(error) && !error) {
+                    const std::filesystem::path candidatePath = iterator->path();
+                    if ((candidatePath.extension() == ".png") && hasHashInFilename(candidatePath.filename().u8string(), hash)) {
+                        std::filesystem::rename(candidatePath, pngPath, error);
+                        if (!error) {
+                            return;
+                        }
+
+                        error.clear();
+                    }
+                }
+
+                iterator.increment(error);
             }
 
             const uint8_t *tmem = reinterpret_cast<const uint8_t *>(state->rdp->TMEM);
@@ -436,11 +378,12 @@ namespace RT64 {
 
         // Insert into set regardless of whether the dump is successful or not.
         dumpedSet.insert(hash);
+        const uint32_t sequence = ++dumpSequence;
         
         // Dump the entirety of TMEM.
         const std::string baseName = replacementBaseName(hash);
         ensureReplacementDatabaseEntry(state->dumpingTexturesDirectory, hash);
-        dumpTexturePNG(state->dumpingTexturesDirectory, hash, state, loadTile, width, height, tlut);
+        dumpTexturePNG(state->dumpingTexturesDirectory, sequence, hash, state, loadTile, width, height, tlut);
 
         const std::filesystem::path rawDumpDirectory = state->dumpingTexturesDirectory / "_debug" / "raw";
         std::error_code rawDumpError;

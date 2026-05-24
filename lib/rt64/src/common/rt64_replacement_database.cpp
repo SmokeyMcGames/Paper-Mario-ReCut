@@ -4,7 +4,9 @@
 
 #include "rt64_replacement_database.h"
 
+#include <algorithm>
 #include <cinttypes>
+#include <cctype>
 
 #include "rt64_filesystem_directory.h"
 
@@ -53,6 +55,37 @@ namespace RT64 {
 
         // The match is accepted if we reached the end of the pattern.
         return (patIndex == pat.size());
+    }
+
+    static bool isHexHashCharacter(char c) {
+        return std::isxdigit(static_cast<unsigned char>(c)) != 0;
+    }
+
+    static std::string findRT64HashInFileName(const std::string &fileName) {
+        constexpr size_t RT64HashLength = 16;
+        if (fileName.size() < RT64HashLength) {
+            return {};
+        }
+
+        for (size_t i = 0; i <= fileName.size() - RT64HashLength; i++) {
+            bool allHashCharacters = true;
+            for (size_t j = 0; j < RT64HashLength; j++) {
+                if (!isHexHashCharacter(fileName[i + j])) {
+                    allHashCharacters = false;
+                    break;
+                }
+            }
+
+            if (allHashCharacters) {
+                std::string hash = fileName.substr(i, RT64HashLength);
+                std::transform(hash.begin(), hash.end(), hash.begin(), [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+                return hash;
+            }
+        }
+
+        return {};
     }
 
     // ReplacementDatabase
@@ -164,9 +197,8 @@ namespace RT64 {
                 }
             }
             else if (config.autoPath == ReplacementAutoPath::RT64) {
-                size_t firstDotSymbol = fileName.find_first_of(".");
-                if (firstDotSymbol != std::string::npos) {
-                    std::string rt64Hash = toLower(fileName.substr(0, firstDotSymbol));
+                std::string rt64Hash = findRT64HashInFileName(fileName);
+                if (!rt64Hash.empty()) {
                     autoPathMap[rt64Hash] = FileSystem::toForwardSlashes(relativePath);
                 }
             }

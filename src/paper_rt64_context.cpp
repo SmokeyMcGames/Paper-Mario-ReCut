@@ -345,6 +345,7 @@ namespace {
             }
 
             app->state->textureManager.dumpedSet.clear();
+            app->state->textureManager.dumpSequence = 0;
             app->state->dumpingTexturesDirectory = directory;
             return true;
         }
