@@ -231,6 +231,7 @@ namespace {
     bool menu_hint_overlay_visible = false;
     HWND fps_overlay_window = nullptr;
     bool fps_overlay_enabled = false;
+    HWND composition_guard_window = nullptr;
     HWND texture_replacement_window = nullptr;
     HWND texture_live_replacement_checkbox = nullptr;
     HWND texture_dump_button = nullptr;
@@ -491,6 +492,88 @@ namespace {
         }
 
         return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
+    LRESULT CALLBACK composition_guard_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+        switch (message) {
+        case WM_NCHITTEST:
+            return HTTRANSPARENT;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT paint;
+            HDC dc = BeginPaint(hwnd, &paint);
+            RECT rect{};
+            GetClientRect(hwnd, &rect);
+            HBRUSH brush = CreateSolidBrush(RGB(0, 0, 0));
+            FillRect(dc, &rect, brush);
+            DeleteObject(brush);
+            EndPaint(hwnd, &paint);
+            return 0;
+        }
+        }
+
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
+    void ensure_composition_guard_window() {
+        if (composition_guard_window || !main_window) {
+            return;
+        }
+
+        const wchar_t* class_name = L"PaperMarioReCutCompositionGuard";
+        static bool registered = false;
+        if (!registered) {
+            WNDCLASSW window_class{};
+            window_class.lpfnWndProc = composition_guard_proc;
+            window_class.hInstance = GetModuleHandleW(nullptr);
+            window_class.lpszClassName = class_name;
+            window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+            RegisterClassW(&window_class);
+            registered = true;
+        }
+
+        composition_guard_window = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            class_name, L"", WS_POPUP, 0, 0, 1, 1,
+            main_window, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+        if (composition_guard_window) {
+            SetLayeredWindowAttributes(composition_guard_window, 0, 1, LWA_ALPHA);
+            ShowWindow(composition_guard_window, SW_SHOWNOACTIVATE);
+        }
+    }
+
+    void position_composition_guard_window() {
+        if (!composition_guard_window || !main_window) {
+            return;
+        }
+
+        RECT client_rect{};
+        POINT client_origin{0, 0};
+        if (!GetClientRect(main_window, &client_rect) || !ClientToScreen(main_window, &client_origin)) {
+            return;
+        }
+
+        const int width = std::max<LONG>(client_rect.right - client_rect.left, 1);
+        const int height = std::max<LONG>(client_rect.bottom - client_rect.top, 1);
+        SetWindowPos(
+            composition_guard_window, HWND_TOP,
+            client_origin.x, client_origin.y,
+            width, height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+
+    void update_composition_guard_window() {
+        ensure_composition_guard_window();
+        position_composition_guard_window();
+    }
+
+    void destroy_composition_guard_window() {
+        if (composition_guard_window) {
+            DestroyWindow(composition_guard_window);
+            composition_guard_window = nullptr;
+        }
     }
 
     void install_app_window_proc() {
@@ -2345,6 +2428,9 @@ namespace {
         SDL_SetHint(SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS, "0");
         SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+        SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "0");
+        SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT_CORRELATE_XINPUT, "0");
+        SDL_SetHint(SDL_HINT_XINPUT_ENABLED, "1");
 
         if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
             show_message(SDL_GetError());
@@ -2356,7 +2442,9 @@ namespace {
         controls.dwICC = ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS | ICC_TAB_CLASSES;
         InitCommonControlsEx(&controls);
         SetThemeAppProperties(STAP_ALLOW_NONCLIENT | STAP_ALLOW_CONTROLS | STAP_ALLOW_WEBCONTENT);
-        SDL_EventState(SDL_SYSWMEVENT, SDL_ENABLE);
+        SDL_EventState(SDL_SYSWMEVENT, SDL_DISABLE);
+        SDL_EventState(SDL_MOUSEMOTION, SDL_IGNORE);
+        SDL_EventState(SDL_MOUSEWHEEL, SDL_IGNORE);
 #endif
 
         open_first_controller();
@@ -2385,6 +2473,7 @@ namespace {
         main_window = wm_info.info.win.window;
         install_app_window_proc();
         set_app_menu_bar_visible(false);
+        update_composition_guard_window();
         show_menu_hint_overlay();
         return ultramodern::renderer::WindowHandle{ main_window, GetCurrentThreadId() };
 #elif defined(__linux__) || defined(__ANDROID__)
@@ -2412,14 +2501,6 @@ namespace {
                     open_first_controller();
                 }
             }
-#ifdef _WIN32
-            else if (event.type == SDL_SYSWMEVENT && event.syswm.msg != nullptr) {
-                const SDL_SysWMmsg* wm_message = event.syswm.msg;
-                if (wm_message->subsystem == SDL_SYSWM_WINDOWS && wm_message->msg.win.msg == WM_COMMAND) {
-                    handle_menu_command(LOWORD(wm_message->msg.win.wParam), main_window);
-                }
-            }
-#endif
         }
 
 #ifdef _WIN32
@@ -2446,6 +2527,7 @@ namespace {
         f10_was_down = f10_down;
         update_menu_hint_overlay();
         update_fps_overlay();
+        update_composition_guard_window();
         refresh_texture_replacement_window();
 #endif
     }
@@ -3140,6 +3222,8 @@ namespace {
 int main(int argc, char** argv) {
 #ifdef _WIN32
     SetUnhandledExceptionFilter(crash_handler);
+    SetProcessPriorityBoost(GetCurrentProcess(), TRUE);
+    SetThreadPriorityBoost(GetCurrentThread(), TRUE);
     SDL_setenv("SDL_AUDIODRIVER", "wasapi", true);
 #endif
 
@@ -3253,6 +3337,7 @@ int main(int argc, char** argv) {
     destroy_texture_replacement_window();
     destroy_menu_hint_overlay();
     destroy_fps_overlay();
+    destroy_composition_guard_window();
     destroy_app_menu_bar();
 #endif
     SDL_Quit();
