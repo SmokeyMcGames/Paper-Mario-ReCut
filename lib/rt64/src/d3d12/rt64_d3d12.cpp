@@ -1279,7 +1279,7 @@ namespace RT64 {
 
     void D3D12SwapChain::wait() {
         if (waitableObject != NULL) {
-            while (WaitForSingleObjectEx(waitableObject, 0, FALSE));
+            WaitForSingleObjectEx(waitableObject, INFINITE, FALSE);
         }
     }
 
