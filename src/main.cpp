@@ -231,7 +231,6 @@ namespace {
     bool menu_hint_overlay_visible = false;
     HWND fps_overlay_window = nullptr;
     bool fps_overlay_enabled = false;
-    HWND composition_guard_window = nullptr;
     HWND texture_replacement_window = nullptr;
     HWND texture_live_replacement_checkbox = nullptr;
     HWND texture_dump_button = nullptr;
@@ -406,6 +405,10 @@ namespace {
     }
 
     LRESULT CALLBACK app_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+        if (message == WM_MOUSEACTIVATE) {
+            return MA_NOACTIVATE;
+        }
+
         if (message == WM_COMMAND && handle_menu_command(LOWORD(wparam), hwnd)) {
             return 0;
         }
@@ -494,88 +497,6 @@ namespace {
         return DefWindowProcW(hwnd, message, wparam, lparam);
     }
 
-    LRESULT CALLBACK composition_guard_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
-        switch (message) {
-        case WM_NCHITTEST:
-            return HTTRANSPARENT;
-        case WM_ERASEBKGND:
-            return 1;
-        case WM_PAINT: {
-            PAINTSTRUCT paint;
-            HDC dc = BeginPaint(hwnd, &paint);
-            RECT rect{};
-            GetClientRect(hwnd, &rect);
-            HBRUSH brush = CreateSolidBrush(RGB(0, 0, 0));
-            FillRect(dc, &rect, brush);
-            DeleteObject(brush);
-            EndPaint(hwnd, &paint);
-            return 0;
-        }
-        }
-
-        return DefWindowProcW(hwnd, message, wparam, lparam);
-    }
-
-    void ensure_composition_guard_window() {
-        if (composition_guard_window || !main_window) {
-            return;
-        }
-
-        const wchar_t* class_name = L"PaperMarioReCutCompositionGuard";
-        static bool registered = false;
-        if (!registered) {
-            WNDCLASSW window_class{};
-            window_class.lpfnWndProc = composition_guard_proc;
-            window_class.hInstance = GetModuleHandleW(nullptr);
-            window_class.lpszClassName = class_name;
-            window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
-            RegisterClassW(&window_class);
-            registered = true;
-        }
-
-        composition_guard_window = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-            class_name, L"", WS_POPUP, 0, 0, 1, 1,
-            main_window, nullptr, GetModuleHandleW(nullptr), nullptr);
-
-        if (composition_guard_window) {
-            SetLayeredWindowAttributes(composition_guard_window, 0, 1, LWA_ALPHA);
-            ShowWindow(composition_guard_window, SW_SHOWNOACTIVATE);
-        }
-    }
-
-    void position_composition_guard_window() {
-        if (!composition_guard_window || !main_window) {
-            return;
-        }
-
-        RECT client_rect{};
-        POINT client_origin{0, 0};
-        if (!GetClientRect(main_window, &client_rect) || !ClientToScreen(main_window, &client_origin)) {
-            return;
-        }
-
-        const int width = std::max<LONG>(client_rect.right - client_rect.left, 1);
-        const int height = std::max<LONG>(client_rect.bottom - client_rect.top, 1);
-        SetWindowPos(
-            composition_guard_window, HWND_TOP,
-            client_origin.x, client_origin.y,
-            width, height,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    }
-
-    void update_composition_guard_window() {
-        ensure_composition_guard_window();
-        position_composition_guard_window();
-    }
-
-    void destroy_composition_guard_window() {
-        if (composition_guard_window) {
-            DestroyWindow(composition_guard_window);
-            composition_guard_window = nullptr;
-        }
-    }
-
     void install_app_window_proc() {
         if (!main_window || previous_window_proc) {
             return;
@@ -583,6 +504,127 @@ namespace {
 
         previous_window_proc = reinterpret_cast<WNDPROC>(
             SetWindowLongPtrW(main_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(app_window_proc)));
+    }
+
+    bool cursor_over_main_window() {
+        if (!main_window || !IsWindowVisible(main_window)) {
+            return false;
+        }
+
+        POINT cursor{};
+        RECT rect{};
+        if (!GetCursorPos(&cursor) || !GetWindowRect(main_window, &rect)) {
+            return false;
+        }
+
+        return PtInRect(&rect, cursor) != FALSE;
+    }
+
+    bool game_window_accepts_local_input() {
+        return GetForegroundWindow() == main_window || cursor_over_main_window();
+    }
+
+    void make_main_window_non_activating() {
+        if (!main_window) {
+            return;
+        }
+
+        SetLastError(ERROR_SUCCESS);
+        LONG_PTR ex_style = GetWindowLongPtrW(main_window, GWL_EXSTYLE);
+        if (ex_style == 0 && GetLastError() != ERROR_SUCCESS) {
+            return;
+        }
+
+        ex_style |= WS_EX_NOACTIVATE | WS_EX_APPWINDOW;
+        ex_style &= ~WS_EX_TOOLWINDOW;
+        SetWindowLongPtrW(main_window, GWL_EXSTYLE, ex_style);
+        SetWindowPos(
+            main_window,
+            nullptr,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
+        ShowWindow(main_window, SW_SHOWNOACTIVATE);
+    }
+
+    int virtual_key_for_scancode(SDL_Scancode scancode) {
+        if (scancode >= SDL_SCANCODE_A && scancode <= SDL_SCANCODE_Z) {
+            return 'A' + (scancode - SDL_SCANCODE_A);
+        }
+        if (scancode >= SDL_SCANCODE_1 && scancode <= SDL_SCANCODE_9) {
+            return '1' + (scancode - SDL_SCANCODE_1);
+        }
+        if (scancode >= SDL_SCANCODE_F1 && scancode <= SDL_SCANCODE_F12) {
+            return VK_F1 + (scancode - SDL_SCANCODE_F1);
+        }
+
+        switch (scancode) {
+        case SDL_SCANCODE_0:
+            return '0';
+        case SDL_SCANCODE_RETURN:
+            return VK_RETURN;
+        case SDL_SCANCODE_ESCAPE:
+            return VK_ESCAPE;
+        case SDL_SCANCODE_BACKSPACE:
+            return VK_BACK;
+        case SDL_SCANCODE_TAB:
+            return VK_TAB;
+        case SDL_SCANCODE_SPACE:
+            return VK_SPACE;
+        case SDL_SCANCODE_LSHIFT:
+            return VK_LSHIFT;
+        case SDL_SCANCODE_RSHIFT:
+            return VK_RSHIFT;
+        case SDL_SCANCODE_LCTRL:
+            return VK_LCONTROL;
+        case SDL_SCANCODE_RCTRL:
+            return VK_RCONTROL;
+        case SDL_SCANCODE_LALT:
+            return VK_LMENU;
+        case SDL_SCANCODE_RALT:
+            return VK_RMENU;
+        case SDL_SCANCODE_UP:
+            return VK_UP;
+        case SDL_SCANCODE_DOWN:
+            return VK_DOWN;
+        case SDL_SCANCODE_LEFT:
+            return VK_LEFT;
+        case SDL_SCANCODE_RIGHT:
+            return VK_RIGHT;
+        case SDL_SCANCODE_HOME:
+            return VK_HOME;
+        case SDL_SCANCODE_END:
+            return VK_END;
+        case SDL_SCANCODE_PAGEUP:
+            return VK_PRIOR;
+        case SDL_SCANCODE_PAGEDOWN:
+            return VK_NEXT;
+        case SDL_SCANCODE_INSERT:
+            return VK_INSERT;
+        case SDL_SCANCODE_DELETE:
+            return VK_DELETE;
+        default:
+            return 0;
+        }
+    }
+
+    bool keyboard_binding_down(SDL_Scancode scancode, const Uint8* keys) {
+        if (scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_NUM_SCANCODES) {
+            return false;
+        }
+
+        if (keys && keys[scancode]) {
+            return true;
+        }
+
+        if (!game_window_accepts_local_input()) {
+            return false;
+        }
+
+        const int virtual_key = virtual_key_for_scancode(scancode);
+        return virtual_key != 0 && (GetAsyncKeyState(virtual_key) & 0x8000) != 0;
     }
 
     void ensure_app_menu_bar() {
@@ -2453,6 +2495,9 @@ namespace {
 
     ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::gfx_data_t) {
         uint32_t flags = SDL_WINDOW_RESIZABLE;
+#if defined(_WIN32)
+        flags |= SDL_WINDOW_HIDDEN;
+#endif
 #if defined(__APPLE__)
         flags |= SDL_WINDOW_METAL;
 #elif defined(RT64_SDL_WINDOW_VULKAN)
@@ -2472,8 +2517,8 @@ namespace {
 #if defined(_WIN32)
         main_window = wm_info.info.win.window;
         install_app_window_proc();
+        make_main_window_non_activating();
         set_app_menu_bar_visible(false);
-        update_composition_guard_window();
         show_menu_hint_overlay();
         return ultramodern::renderer::WindowHandle{ main_window, GetCurrentThreadId() };
 #elif defined(__linux__) || defined(__ANDROID__)
@@ -2507,27 +2552,26 @@ namespace {
         static bool f1_was_down = false;
         static bool f8_was_down = false;
         static bool f10_was_down = false;
-        const bool foreground = GetForegroundWindow() == main_window;
-        bool f1_down = foreground && (GetAsyncKeyState(VK_F1) & 0x8000) != 0;
+        const bool hotkeys_allowed = game_window_accepts_local_input();
+        bool f1_down = hotkeys_allowed && (GetAsyncKeyState(VK_F1) & 0x8000) != 0;
         if (f1_down && !f1_was_down) {
             toggle_app_menu_bar();
         }
         f1_was_down = f1_down;
 
-        bool f8_down = foreground && (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+        bool f8_down = hotkeys_allowed && (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
         if (f8_down && !f8_was_down) {
             show_texture_replacement_window();
         }
         f8_was_down = f8_down;
 
-        bool f10_down = foreground && (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
+        bool f10_down = hotkeys_allowed && (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
         if (f10_down && !f10_was_down) {
             set_fps_overlay_enabled(!fps_overlay_enabled);
         }
         f10_was_down = f10_down;
         update_menu_hint_overlay();
         update_fps_overlay();
-        update_composition_guard_window();
         refresh_texture_replacement_window();
 #endif
     }
@@ -2750,7 +2794,11 @@ namespace {
         const Uint8* keys = SDL_GetKeyboardState(nullptr);
         for (int i = 0; i < input_action_count; i++) {
             const SDL_Scancode scancode = input_snapshot.keyboard_bindings[i];
+#ifdef _WIN32
+            if (keyboard_binding_down(scancode, keys)) {
+#else
             if (scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_NUM_SCANCODES && keys[scancode]) {
+#endif
                 apply_input_action(i, 1.0f, out_buttons, out_x, out_y);
             }
 
@@ -2760,7 +2808,7 @@ namespace {
         if (input_snapshot.mouse_click_to_move && window != nullptr) {
             bool mouse_controls_active = true;
 #ifdef _WIN32
-            mouse_controls_active = GetForegroundWindow() == main_window;
+            mouse_controls_active = game_window_accepts_local_input();
 #endif
             if (mouse_controls_active) {
                 int mouse_x = 0;
@@ -3337,7 +3385,6 @@ int main(int argc, char** argv) {
     destroy_texture_replacement_window();
     destroy_menu_hint_overlay();
     destroy_fps_overlay();
-    destroy_composition_guard_window();
     destroy_app_menu_bar();
 #endif
     SDL_Quit();
