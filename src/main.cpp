@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -73,6 +74,8 @@ namespace {
     void show_info_message(const char* msg);
     std::filesystem::path app_base_path();
     std::filesystem::path app_executable_path();
+    std::filesystem::path texture_replacement_path();
+    bool ensure_texture_replacement_database(const std::filesystem::path& directory);
 
 #ifdef _WIN32
     HWND main_window = nullptr;
@@ -83,6 +86,10 @@ namespace {
     bool menu_hint_overlay_visible = false;
     HWND fps_overlay_window = nullptr;
     bool fps_overlay_enabled = false;
+    HWND texture_replacement_window = nullptr;
+    HWND texture_easy_mode_checkbox = nullptr;
+    HWND texture_status_label = nullptr;
+    bool texture_easy_mode_enabled = false;
     std::atomic<uint32_t> fps_vi_ticks{0};
     uint64_t fps_last_presented_frames = 0;
     std::chrono::steady_clock::time_point fps_last_sample = std::chrono::steady_clock::now();
@@ -96,9 +103,13 @@ namespace {
     constexpr UINT_PTR menu_command_graphics_options = 40020;
     constexpr UINT_PTR menu_command_fullscreen = 40021;
     constexpr UINT_PTR menu_command_resolution = 40022;
+    constexpr UINT_PTR menu_command_texture_replacement = 40023;
     constexpr UINT_PTR menu_command_controller_setup = 40040;
     constexpr UINT_PTR menu_command_rebind_keys = 40041;
     constexpr UINT_PTR menu_command_input_profiles = 40042;
+    constexpr UINT_PTR texture_command_easy_mode = 40100;
+    constexpr UINT_PTR texture_command_reload = 40101;
+    constexpr UINT_PTR texture_command_open_folder = 40102;
 
     constexpr uint8_t menu_hint_max_alpha = 220;
     constexpr double menu_hint_fade_in_seconds = 0.35;
@@ -111,6 +122,10 @@ namespace {
 
     void set_app_menu_bar_visible(bool visible);
     void hide_menu_hint_overlay();
+    void show_texture_replacement_window();
+    void destroy_texture_replacement_window();
+    void refresh_texture_replacement_window();
+    bool handle_menu_command(UINT_PTR command, HWND hwnd);
 
     void restart_application() {
         const std::filesystem::path executable = app_executable_path();
@@ -145,41 +160,50 @@ namespace {
         ultramodern::quit();
     }
 
+    bool handle_menu_command(UINT_PTR command, HWND hwnd) {
+        switch (command) {
+        case menu_command_restart:
+            restart_application();
+            return true;
+        case menu_command_save_state:
+            show_info_message("Save states are not implemented yet. This menu item is reserved for the save-state system.");
+            return true;
+        case menu_command_load_state:
+            show_info_message("Load states are not implemented yet. This menu item is reserved for the save-state system.");
+            return true;
+        case menu_command_exit:
+            ultramodern::quit();
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            return true;
+        case menu_command_graphics_options:
+            show_info_message("Graphics options will live here as Paper Mario ReCut grows.");
+            return true;
+        case menu_command_fullscreen:
+            show_info_message("Fullscreen controls will be added to the graphics menu.");
+            return true;
+        case menu_command_resolution:
+            show_info_message("Resolution and scaling controls will be added to the graphics menu.");
+            return true;
+        case menu_command_texture_replacement:
+            show_texture_replacement_window();
+            return true;
+        case menu_command_controller_setup:
+            show_info_message("Full controller setup will live here.");
+            return true;
+        case menu_command_rebind_keys:
+            show_info_message("Keyboard and controller rebinding will be added here.");
+            return true;
+        case menu_command_input_profiles:
+            show_info_message("Input profiles will be added with the rebinding system.");
+            return true;
+        default:
+            return false;
+        }
+    }
+
     LRESULT CALLBACK app_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
-        if (message == WM_COMMAND) {
-            switch (LOWORD(wparam)) {
-            case menu_command_restart:
-                restart_application();
-                return 0;
-            case menu_command_save_state:
-                show_info_message("Save states are not implemented yet. This menu item is reserved for the save-state system.");
-                return 0;
-            case menu_command_load_state:
-                show_info_message("Load states are not implemented yet. This menu item is reserved for the save-state system.");
-                return 0;
-            case menu_command_exit:
-                ultramodern::quit();
-                PostMessageW(hwnd, WM_CLOSE, 0, 0);
-                return 0;
-            case menu_command_graphics_options:
-                show_info_message("Graphics options will live here as Paper Mario ReCut grows.");
-                return 0;
-            case menu_command_fullscreen:
-                show_info_message("Fullscreen controls will be added to the graphics menu.");
-                return 0;
-            case menu_command_resolution:
-                show_info_message("Resolution and scaling controls will be added to the graphics menu.");
-                return 0;
-            case menu_command_controller_setup:
-                show_info_message("Full controller setup will live here.");
-                return 0;
-            case menu_command_rebind_keys:
-                show_info_message("Keyboard and controller rebinding will be added here.");
-                return 0;
-            case menu_command_input_profiles:
-                show_info_message("Input profiles will be added with the rebinding system.");
-                return 0;
-            }
+        if (message == WM_COMMAND && handle_menu_command(LOWORD(wparam), hwnd)) {
+            return 0;
         }
 
         if (previous_window_proc) {
@@ -294,6 +318,8 @@ namespace {
         HMENU graphics_menu = CreatePopupMenu();
         AppendMenuW(graphics_menu, MF_STRING, menu_command_graphics_options, L"&Graphics Options...");
         AppendMenuW(graphics_menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(graphics_menu, MF_STRING, menu_command_texture_replacement, L"&Texture Replacement...");
+        AppendMenuW(graphics_menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(graphics_menu, MF_STRING, menu_command_fullscreen, L"&Fullscreen...");
         AppendMenuW(graphics_menu, MF_STRING, menu_command_resolution, L"&Resolution / Scaling...");
         AppendMenuW(app_menu_bar, MF_POPUP, reinterpret_cast<UINT_PTR>(graphics_menu), L"&Graphics");
@@ -335,6 +361,208 @@ namespace {
             app_menu_bar = nullptr;
         }
         app_menu_bar_visible = false;
+    }
+
+    void reload_texture_replacement_folder() {
+        const std::filesystem::path directory = texture_replacement_path();
+        std::error_code error;
+        std::filesystem::create_directories(directory, error);
+        if (error || !ensure_texture_replacement_database(directory)) {
+            show_message("Paper Mario ReCut could not prepare the textures folder.");
+            return;
+        }
+
+        ultramodern::load_texture_replacements(directory);
+        refresh_texture_replacement_window();
+    }
+
+    void set_easy_texture_replacement_enabled(bool enabled) {
+        texture_easy_mode_enabled = enabled;
+
+        if (enabled) {
+            reload_texture_replacement_folder();
+            ultramodern::start_texture_dumping(texture_replacement_path());
+        }
+        else {
+            ultramodern::stop_texture_dumping();
+        }
+
+        refresh_texture_replacement_window();
+    }
+
+    void open_texture_replacement_folder() {
+        const std::filesystem::path directory = texture_replacement_path();
+        std::error_code error;
+        std::filesystem::create_directories(directory, error);
+        ensure_texture_replacement_database(directory);
+
+        std::wstring command_line = L"explorer.exe \"" + directory.wstring() + L"\"";
+        STARTUPINFOW startup_info{};
+        startup_info.cb = sizeof(startup_info);
+        PROCESS_INFORMATION process_info{};
+        if (CreateProcessW(
+                nullptr,
+                command_line.data(),
+                nullptr,
+                nullptr,
+                FALSE,
+                0,
+                nullptr,
+                directory.c_str(),
+                &startup_info,
+                &process_info)) {
+            CloseHandle(process_info.hThread);
+            CloseHandle(process_info.hProcess);
+        }
+    }
+
+    void refresh_texture_replacement_window() {
+        if (!texture_replacement_window) {
+            return;
+        }
+
+        if (texture_easy_mode_checkbox) {
+            CheckDlgButton(
+                texture_replacement_window,
+                static_cast<int>(texture_command_easy_mode),
+                texture_easy_mode_enabled ? BST_CHECKED : BST_UNCHECKED);
+        }
+
+        if (texture_status_label) {
+            const bool loaded = ultramodern::is_texture_replacement_loaded();
+            const bool dumping = ultramodern::is_texture_dumping();
+            const wchar_t* status = L"Textures folder ready.";
+            if (texture_easy_mode_enabled && dumping) {
+                status = L"Easy mode on. Dumping newly seen textures.";
+            }
+            else if (texture_easy_mode_enabled) {
+                status = L"Easy mode starting.";
+            }
+            else if (loaded) {
+                status = L"Textures folder loaded.";
+            }
+            SetWindowTextW(texture_status_label, status);
+        }
+    }
+
+    LRESULT CALLBACK texture_replacement_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+        switch (message) {
+        case WM_CREATE: {
+            HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+
+            texture_easy_mode_checkbox = CreateWindowExW(
+                0, L"BUTTON", L"Easy mode replacement",
+                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                18, 18, 210, 24,
+                hwnd, reinterpret_cast<HMENU>(texture_command_easy_mode), GetModuleHandleW(nullptr), nullptr);
+
+            HWND reload_button = CreateWindowExW(
+                0, L"BUTTON", L"Reload Folder",
+                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                18, 56, 126, 28,
+                hwnd, reinterpret_cast<HMENU>(texture_command_reload), GetModuleHandleW(nullptr), nullptr);
+
+            HWND open_button = CreateWindowExW(
+                0, L"BUTTON", L"Open Folder",
+                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                154, 56, 116, 28,
+                hwnd, reinterpret_cast<HMENU>(texture_command_open_folder), GetModuleHandleW(nullptr), nullptr);
+
+            texture_status_label = CreateWindowExW(
+                0, L"STATIC", L"Textures folder ready.",
+                WS_CHILD | WS_VISIBLE | SS_LEFT,
+                18, 98, 300, 24,
+                hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+            SendMessageW(texture_easy_mode_checkbox, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            SendMessageW(reload_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            SendMessageW(open_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            SendMessageW(texture_status_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            refresh_texture_replacement_window();
+            return 0;
+        }
+        case WM_COMMAND:
+            switch (LOWORD(wparam)) {
+            case texture_command_easy_mode:
+                if (HIWORD(wparam) == BN_CLICKED) {
+                    const bool enabled = IsDlgButtonChecked(hwnd, static_cast<int>(texture_command_easy_mode)) == BST_CHECKED;
+                    set_easy_texture_replacement_enabled(enabled);
+                    return 0;
+                }
+                break;
+            case texture_command_reload:
+                reload_texture_replacement_folder();
+                return 0;
+            case texture_command_open_folder:
+                open_texture_replacement_folder();
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        case WM_DESTROY:
+            texture_replacement_window = nullptr;
+            texture_easy_mode_checkbox = nullptr;
+            texture_status_label = nullptr;
+            return 0;
+        }
+
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
+    void show_texture_replacement_window() {
+        if (!main_window) {
+            return;
+        }
+
+        if (!texture_replacement_window) {
+            const wchar_t* class_name = L"PaperMarioReCutTextureReplacement";
+            static bool registered = false;
+            if (!registered) {
+                WNDCLASSW window_class{};
+                window_class.lpfnWndProc = texture_replacement_window_proc;
+                window_class.hInstance = GetModuleHandleW(nullptr);
+                window_class.lpszClassName = class_name;
+                window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+                window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+                RegisterClassW(&window_class);
+                registered = true;
+            }
+
+            RECT owner_rect{};
+            GetWindowRect(main_window, &owner_rect);
+            constexpr int dialog_width = 340;
+            constexpr int dialog_height = 170;
+            const int owner_width = static_cast<int>(owner_rect.right - owner_rect.left);
+            const int owner_height = static_cast<int>(owner_rect.bottom - owner_rect.top);
+            const int x = static_cast<int>(owner_rect.left) + std::max(0, (owner_width - dialog_width) / 2);
+            const int y = static_cast<int>(owner_rect.top) + std::max(0, (owner_height - dialog_height) / 2);
+
+            texture_replacement_window = CreateWindowExW(
+                WS_EX_DLGMODALFRAME,
+                class_name,
+                L"Texture Replacement",
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                x, y, dialog_width, dialog_height,
+                main_window,
+                nullptr,
+                GetModuleHandleW(nullptr),
+                nullptr);
+        }
+
+        refresh_texture_replacement_window();
+        ShowWindow(texture_replacement_window, SW_SHOWNORMAL);
+        SetForegroundWindow(texture_replacement_window);
+    }
+
+    void destroy_texture_replacement_window() {
+        if (texture_replacement_window) {
+            DestroyWindow(texture_replacement_window);
+            texture_replacement_window = nullptr;
+        }
+        texture_easy_mode_checkbox = nullptr;
+        texture_status_label = nullptr;
     }
 
     void ensure_menu_hint_overlay_window() {
@@ -604,6 +832,9 @@ namespace {
             show_message(SDL_GetError());
             std::exit(EXIT_FAILURE);
         }
+#ifdef _WIN32
+        SDL_EventState(SDL_SYSWMEVENT, SDL_ENABLE);
+#endif
 
         open_first_controller();
         return nullptr;
@@ -657,10 +888,19 @@ namespace {
                     open_first_controller();
                 }
             }
+#ifdef _WIN32
+            else if (event.type == SDL_SYSWMEVENT && event.syswm.msg != nullptr) {
+                const SDL_SysWMmsg* wm_message = event.syswm.msg;
+                if (wm_message->subsystem == SDL_SYSWM_WINDOWS && wm_message->msg.win.msg == WM_COMMAND) {
+                    handle_menu_command(LOWORD(wm_message->msg.win.wParam), main_window);
+                }
+            }
+#endif
         }
 
 #ifdef _WIN32
         static bool f1_was_down = false;
+        static bool f8_was_down = false;
         static bool f10_was_down = false;
         const bool foreground = GetForegroundWindow() == main_window;
         bool f1_down = foreground && (GetAsyncKeyState(VK_F1) & 0x8000) != 0;
@@ -669,6 +909,12 @@ namespace {
         }
         f1_was_down = f1_down;
 
+        bool f8_down = foreground && (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+        if (f8_down && !f8_was_down) {
+            show_texture_replacement_window();
+        }
+        f8_was_down = f8_down;
+
         bool f10_down = foreground && (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
         if (f10_down && !f10_was_down) {
             set_fps_overlay_enabled(!fps_overlay_enabled);
@@ -676,6 +922,7 @@ namespace {
         f10_was_down = f10_down;
         update_menu_hint_overlay();
         update_fps_overlay();
+        refresh_texture_replacement_window();
 #endif
     }
 
@@ -928,6 +1175,44 @@ namespace {
         return base;
     }
 
+    std::filesystem::path texture_replacement_path() {
+        return app_base_path() / "textures";
+    }
+
+    bool ensure_texture_replacement_database(const std::filesystem::path& directory) {
+        std::error_code error;
+        std::filesystem::create_directories(directory, error);
+        if (error) {
+            return false;
+        }
+
+        const std::filesystem::path database_path = directory / "rt64.json";
+        if (std::filesystem::exists(database_path)) {
+            return true;
+        }
+
+        std::ofstream database(database_path, std::ios::binary);
+        if (!database.good()) {
+            return false;
+        }
+
+        database <<
+            "{\n"
+            "    \"configuration\": {\n"
+            "        \"configurationVersion\": 3,\n"
+            "        \"autoPath\": \"rt64\",\n"
+            "        \"defaultOperation\": \"stream\",\n"
+            "        \"defaultShift\": \"half\",\n"
+            "        \"hashVersion\": 5\n"
+            "    },\n"
+            "    \"textures\": [],\n"
+            "    \"operationFilters\": [],\n"
+            "    \"shiftFilters\": [],\n"
+            "    \"extraFiles\": []\n"
+            "}\n";
+        return true;
+    }
+
     std::filesystem::path installed_rom_path() {
         return app_config_path() / "pm.n64.us.z64";
     }
@@ -1149,6 +1434,12 @@ int main(int argc, char** argv) {
         recomp::start_game(game_id);
     }).detach();
 
+    const std::filesystem::path textures_path = texture_replacement_path();
+    if (std::filesystem::is_directory(textures_path)) {
+        ensure_texture_replacement_database(textures_path);
+        ultramodern::set_startup_texture_replacement_directory(textures_path);
+    }
+
     recomp::start(
         version,
         {},
@@ -1170,6 +1461,7 @@ int main(int argc, char** argv) {
         audio_device = 0;
     }
 #ifdef _WIN32
+    destroy_texture_replacement_window();
     destroy_menu_hint_overlay();
     destroy_fps_overlay();
     destroy_app_menu_bar();

@@ -6,6 +6,9 @@ build-*/
 user/
 **/user/
 
+# Local texture replacement packs and dumps can contain ROM-derived assets.
+/textures/
+
 # Generated from a user-provided ROM. Keep local, never publish.
 generated/paper_mario_recomp_out/
 

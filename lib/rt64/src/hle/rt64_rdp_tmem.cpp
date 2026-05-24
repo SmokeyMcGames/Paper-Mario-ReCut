@@ -6,6 +6,8 @@
 
 #include <cassert>
 #include <cinttypes>
+#include <fstream>
+#include <iomanip>
 
 #include "xxHash/xxh3.h"
 
@@ -14,6 +16,55 @@
 #include "rt64_state.h"
 
 namespace RT64 {
+    namespace {
+        void ensureReplacementDatabaseEntry(const std::filesystem::path &directory, uint64_t hash) {
+            std::error_code error;
+            std::filesystem::create_directories(directory, error);
+            if (error) {
+                return;
+            }
+
+            ReplacementDatabase database;
+            database.config.autoPath = ReplacementAutoPath::RT64;
+            database.config.defaultOperation = ReplacementOperation::Stream;
+            database.config.defaultShift = ReplacementShift::Half;
+            database.config.hashVersion = TMEMHasher::CurrentHashVersion;
+
+            const std::filesystem::path databasePath = directory / ReplacementDatabaseFilename;
+            if (std::filesystem::exists(databasePath)) {
+                std::ifstream databaseStream(databasePath);
+                if (databaseStream.is_open()) {
+                    try {
+                        json parsed;
+                        databaseStream >> parsed;
+                        database = parsed;
+                    }
+                    catch (const nlohmann::detail::exception &) {
+                        database = ReplacementDatabase();
+                    }
+                }
+            }
+
+            database.config.autoPath = ReplacementAutoPath::RT64;
+            database.config.hashVersion = TMEMHasher::CurrentHashVersion;
+            database.buildHashMaps();
+
+            if (!database.getReplacement(hash).isEmpty()) {
+                return;
+            }
+
+            ReplacementTexture texture;
+            texture.hashes.rt64 = ReplacementDatabase::hashToString(hash);
+            database.addReplacement(texture);
+
+            std::ofstream databaseStream(databasePath);
+            if (databaseStream.is_open()) {
+                json serialized = database;
+                databaseStream << std::setw(4) << serialized << std::endl;
+            }
+        }
+    }
+
     // TextureManager
 
     void TextureManager::uploadEmpty(State *state, TextureCache *textureCache, uint64_t creationFrame, uint16_t width, uint16_t height, uint64_t replacementHash) {
@@ -76,6 +127,8 @@ namespace RT64 {
         // Dump the entirety of TMEM.
         char baseName[64];
         snprintf(baseName, sizeof(baseName), "%016" PRIx64 ".v%u", hash, TMEMHasher::CurrentHashVersion);
+        ensureReplacementDatabaseEntry(state->dumpingTexturesDirectory, hash);
+
         std::filesystem::path dumpTmemPath = state->dumpingTexturesDirectory / (std::string(baseName) + ".tmem");
         std::ofstream dumpTmemStream(dumpTmemPath, std::ios::binary);
         if (dumpTmemStream.is_open()) {

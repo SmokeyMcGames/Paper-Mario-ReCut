@@ -17,6 +17,7 @@
 #define HLSL_CPU
 #endif
 #include "hle/rt64_application.h"
+#include "hle/rt64_state.h"
 
 #include "ultramodern/config.hpp"
 #include "ultramodern/ultramodern.hpp"
@@ -262,6 +263,42 @@ namespace {
             }
             constexpr int reference_height = 240;
             return std::max(float((app->sharedQueueResources->swapChainHeight + reference_height - 1) / reference_height), 1.0f);
+        }
+
+        bool load_texture_replacements(const std::filesystem::path& directory) override {
+            if (!app || !app->textureCache || !std::filesystem::is_directory(directory)) {
+                return false;
+            }
+
+            return app->textureCache->loadReplacementDirectory(RT64::ReplacementDirectory(directory));
+        }
+
+        void clear_texture_replacements() override {
+            if (app && app->textureCache) {
+                app->textureCache->clearReplacementDirectories();
+            }
+        }
+
+        bool start_texture_dumping(const std::filesystem::path& directory) override {
+            if (!app || !app->state) {
+                return false;
+            }
+
+            std::error_code error;
+            std::filesystem::create_directories(directory, error);
+            if (error || !std::filesystem::is_directory(directory)) {
+                return false;
+            }
+
+            app->state->textureManager.dumpedSet.clear();
+            app->state->dumpingTexturesDirectory = directory;
+            return true;
+        }
+
+        void stop_texture_dumping() override {
+            if (app && app->state) {
+                app->state->dumpingTexturesDirectory.clear();
+            }
         }
 
     private:

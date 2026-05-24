@@ -35,7 +35,28 @@ struct ScreenUpdateAction {
 struct UpdateConfigAction {
 };
 
-using Action = std::variant<SpTaskAction, ScreenUpdateAction, UpdateConfigAction>;
+struct LoadTextureReplacementsAction {
+    std::filesystem::path directory;
+};
+
+struct ClearTextureReplacementsAction {
+};
+
+struct StartTextureDumpingAction {
+    std::filesystem::path directory;
+};
+
+struct StopTextureDumpingAction {
+};
+
+using Action = std::variant<
+    SpTaskAction,
+    ScreenUpdateAction,
+    UpdateConfigAction,
+    LoadTextureReplacementsAction,
+    ClearTextureReplacementsAction,
+    StartTextureDumpingAction,
+    StopTextureDumpingAction>;
 
 struct ViState {
     const OSViMode* mode;
@@ -294,6 +315,9 @@ void task_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_r
 std::atomic_uint32_t display_refresh_rate = 60;
 std::atomic_uint64_t presented_frame_count = 0;
 std::atomic<float> resolution_scale = 1.0f;
+std::atomic_bool texture_replacement_loaded = false;
+std::atomic_bool texture_dumping = false;
+std::filesystem::path startup_texture_replacement_directory;
 
 uint32_t ultramodern::get_target_framerate(uint32_t original) {
     auto& config = ultramodern::renderer::get_graphics_config();
@@ -325,6 +349,34 @@ void ultramodern::trigger_config_action() {
     events_context.action_queue.enqueue(UpdateConfigAction{});
 }
 
+void ultramodern::set_startup_texture_replacement_directory(const std::filesystem::path& directory) {
+    startup_texture_replacement_directory = directory;
+}
+
+void ultramodern::load_texture_replacements(const std::filesystem::path& directory) {
+    events_context.action_queue.enqueue(LoadTextureReplacementsAction{ directory });
+}
+
+void ultramodern::clear_texture_replacements() {
+    events_context.action_queue.enqueue(ClearTextureReplacementsAction{});
+}
+
+void ultramodern::start_texture_dumping(const std::filesystem::path& directory) {
+    events_context.action_queue.enqueue(StartTextureDumpingAction{ directory });
+}
+
+void ultramodern::stop_texture_dumping() {
+    events_context.action_queue.enqueue(StopTextureDumpingAction{});
+}
+
+bool ultramodern::is_texture_replacement_loaded() {
+    return texture_replacement_loaded.load();
+}
+
+bool ultramodern::is_texture_dumping() {
+    return texture_dumping.load();
+}
+
 std::atomic<ultramodern::renderer::SetupResult> renderer_setup_result = ultramodern::renderer::SetupResult::Success;
 std::atomic<ultramodern::renderer::GraphicsApi> renderer_chosen_api = ultramodern::renderer::GraphicsApi::Auto;
 
@@ -345,6 +397,10 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
         // Notify the caller thread that this thread is ready.
         thread_ready->signal();
         return;
+    }
+
+    if (!startup_texture_replacement_directory.empty() && std::filesystem::is_directory(startup_texture_replacement_directory)) {
+        texture_replacement_loaded.store(renderer_context->load_texture_replacements(startup_texture_replacement_directory));
     }
 
     if (events_callbacks.gfx_init_callback != nullptr) {
@@ -393,6 +449,22 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
                 if (renderer_context->update_config(old_config, new_config)) {
                     old_config = new_config;
                 }
+            }
+            else if (const auto* load_texture_action = std::get_if<LoadTextureReplacementsAction>(&action)) {
+                texture_replacement_loaded.store(renderer_context->load_texture_replacements(load_texture_action->directory));
+            }
+            else if (const auto* clear_texture_action = std::get_if<ClearTextureReplacementsAction>(&action)) {
+                (void)clear_texture_action;
+                renderer_context->clear_texture_replacements();
+                texture_replacement_loaded.store(false);
+            }
+            else if (const auto* start_dump_action = std::get_if<StartTextureDumpingAction>(&action)) {
+                texture_dumping.store(renderer_context->start_texture_dumping(start_dump_action->directory));
+            }
+            else if (const auto* stop_dump_action = std::get_if<StopTextureDumpingAction>(&action)) {
+                (void)stop_dump_action;
+                renderer_context->stop_texture_dumping();
+                texture_dumping.store(false);
             }
         }
     }

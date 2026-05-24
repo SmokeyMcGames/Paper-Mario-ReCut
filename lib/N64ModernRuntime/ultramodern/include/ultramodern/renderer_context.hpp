@@ -2,6 +2,7 @@
 #define __RENDERER_WRAPPER_HPP__
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
@@ -89,6 +90,10 @@ namespace ultramodern {
                 virtual uint32_t get_display_framerate() const = 0;
                 virtual uint64_t get_presented_frame_count() const = 0;
                 virtual float get_resolution_scale() const = 0;
+                virtual bool load_texture_replacements(const std::filesystem::path& directory) { return false; }
+                virtual void clear_texture_replacements() {}
+                virtual bool start_texture_dumping(const std::filesystem::path& directory) { return false; }
+                virtual void stop_texture_dumping() {}
 
             protected:
                 SetupResult setup_result;

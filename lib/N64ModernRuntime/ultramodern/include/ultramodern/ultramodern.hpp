@@ -93,6 +93,13 @@ uint32_t get_display_refresh_rate();
 uint64_t get_presented_frame_count();
 float get_resolution_scale();
 void trigger_config_action();
+void set_startup_texture_replacement_directory(const std::filesystem::path& directory);
+void load_texture_replacements(const std::filesystem::path& directory);
+void clear_texture_replacements();
+void start_texture_dumping(const std::filesystem::path& directory);
+void stop_texture_dumping();
+bool is_texture_replacement_loaded();
+bool is_texture_dumping();
 
 // Audio
 void init_audio();
