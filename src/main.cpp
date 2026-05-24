@@ -406,7 +406,7 @@ namespace {
 
     LRESULT CALLBACK app_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         if (message == WM_MOUSEACTIVATE) {
-            return MA_NOACTIVATE;
+            return app_menu_bar_visible ? MA_ACTIVATE : MA_NOACTIVATE;
         }
 
         if (message == WM_COMMAND && handle_menu_command(LOWORD(wparam), hwnd)) {
@@ -524,7 +524,7 @@ namespace {
         return GetForegroundWindow() == main_window || cursor_over_main_window();
     }
 
-    void make_main_window_non_activating() {
+    void set_main_window_activation_enabled(bool enabled) {
         if (!main_window) {
             return;
         }
@@ -535,9 +535,22 @@ namespace {
             return;
         }
 
-        ex_style |= WS_EX_NOACTIVATE | WS_EX_APPWINDOW;
+        if (enabled) {
+            ex_style &= ~WS_EX_NOACTIVATE;
+        }
+        else {
+            ex_style |= WS_EX_NOACTIVATE;
+        }
+
+        ex_style |= WS_EX_APPWINDOW;
         ex_style &= ~WS_EX_TOOLWINDOW;
         SetWindowLongPtrW(main_window, GWL_EXSTYLE, ex_style);
+
+        UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED;
+        if (!enabled) {
+            flags |= SWP_NOACTIVATE;
+        }
+
         SetWindowPos(
             main_window,
             nullptr,
@@ -545,8 +558,12 @@ namespace {
             0,
             0,
             0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
-        ShowWindow(main_window, SW_SHOWNOACTIVATE);
+            flags);
+        ShowWindow(main_window, enabled ? SW_SHOW : SW_SHOWNOACTIVATE);
+    }
+
+    void make_main_window_non_activating() {
+        set_main_window_activation_enabled(false);
     }
 
     int virtual_key_for_scancode(SDL_Scancode scancode) {
@@ -665,10 +682,15 @@ namespace {
 
         if (visible) {
             ensure_app_menu_bar();
+            set_main_window_activation_enabled(true);
         }
         SetMenu(main_window, visible ? app_menu_bar : nullptr);
         DrawMenuBar(main_window);
         app_menu_bar_visible = visible;
+
+        if (!visible) {
+            set_main_window_activation_enabled(false);
+        }
     }
 
     void toggle_app_menu_bar() {
