@@ -11,6 +11,7 @@
 #include <optional>
 #include <mutex>
 #include <array>
+#include <atomic>
 #include <cinttypes>
 #include <cuchar>
 #include <charconv>
@@ -535,9 +536,12 @@ bool ultramodern::is_game_started() {
 
 std::atomic_bool exited = false;
 moodycamel::LightweightSemaphore graphics_shutdown_ready;
+extern std::atomic<uint64_t> total_vis;
 
 void ultramodern::quit() {
     exited.store(true);
+    total_vis.fetch_add(1, std::memory_order_release);
+    total_vis.notify_all();
     GameStatus desired = GameStatus::None;
     game_status.compare_exchange_strong(desired, GameStatus::Quit);
     game_status.notify_all();

@@ -1,3 +1,5 @@
+#include <atomic>
+
 #include <ultramodern/ultramodern.hpp>
 #include "recomp.h"
 #include "helpers.hpp"
@@ -42,11 +44,19 @@ extern "C" void osViSetMode_recomp(uint8_t* rdram, recomp_context* ctx) {
     osViSetMode(rdram, (int32_t)ctx->r4);
 }
 
-extern uint64_t total_vis;
+extern std::atomic<uint64_t> total_vis;
+extern std::atomic_bool exited;
 
 extern "C" void wait_one_frame(uint8_t* rdram, recomp_context* ctx) {
-    uint64_t cur_vis = total_vis;
-    while (cur_vis == total_vis) {
-        std::this_thread::yield();
+    const uint64_t cur_vis = total_vis.load(std::memory_order_acquire);
+    while (!exited.load(std::memory_order_acquire)) {
+        const uint64_t observed_vis = total_vis.load(std::memory_order_acquire);
+        if (observed_vis != cur_vis) {
+            return;
+        }
+
+        // This runs once per VI from the game thread. Sleeping on the VI counter
+        // avoids pinning a CPU core while waiting for the host VI thread to tick.
+        total_vis.wait(observed_vis, std::memory_order_acquire);
     }
 }
