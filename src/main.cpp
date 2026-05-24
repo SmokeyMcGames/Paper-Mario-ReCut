@@ -431,15 +431,15 @@ namespace {
         if (texture_status_label) {
             const bool loaded = ultramodern::is_texture_replacement_loaded();
             const bool dumping = ultramodern::is_texture_dumping();
-            const wchar_t* status = L"Textures folder ready.";
+            const wchar_t* status = L"PNG texture folders ready.";
             if (texture_easy_mode_enabled && dumping) {
-                status = L"Easy mode on. Dumping newly seen textures.";
+                status = L"Easy mode on. Dumping live PNG textures.";
             }
             else if (texture_easy_mode_enabled) {
                 status = L"Easy mode starting.";
             }
             else if (loaded) {
-                status = L"Textures folder loaded.";
+                status = L"Textures folder loaded with live reload.";
             }
             SetWindowTextW(texture_status_label, status);
         }
@@ -469,9 +469,9 @@ namespace {
                 hwnd, reinterpret_cast<HMENU>(texture_command_open_folder), GetModuleHandleW(nullptr), nullptr);
 
             texture_status_label = CreateWindowExW(
-                0, L"STATIC", L"Textures folder ready.",
+                0, L"STATIC", L"PNG texture folders ready.",
                 WS_CHILD | WS_VISIBLE | SS_LEFT,
-                18, 98, 300, 24,
+                18, 98, 330, 24,
                 hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
 
             SendMessageW(texture_easy_mode_checkbox, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -532,7 +532,7 @@ namespace {
 
             RECT owner_rect{};
             GetWindowRect(main_window, &owner_rect);
-            constexpr int dialog_width = 340;
+            constexpr int dialog_width = 370;
             constexpr int dialog_height = 170;
             const int owner_width = static_cast<int>(owner_rect.right - owner_rect.left);
             const int owner_height = static_cast<int>(owner_rect.bottom - owner_rect.top);
@@ -1184,6 +1184,20 @@ namespace {
         std::filesystem::create_directories(directory, error);
         if (error) {
             return false;
+        }
+
+        const std::filesystem::path starter_folders[] = {
+            directory / "sprites" / "unassigned",
+            directory / "models" / "unassigned",
+            directory / "masks" / "unassigned",
+            directory / "misc" / "unassigned",
+            directory / "_debug" / "raw"
+        };
+        for (const std::filesystem::path& starter_folder : starter_folders) {
+            std::filesystem::create_directories(starter_folder, error);
+            if (error) {
+                return false;
+            }
         }
 
         const std::filesystem::path database_path = directory / "rt64.json";

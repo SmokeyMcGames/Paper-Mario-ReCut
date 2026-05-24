@@ -3,9 +3,13 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
+#include <filesystem>
 #include <memory>
+#include <string>
 
 #if defined(_WIN32)
 #include <Unknwn.h>
@@ -108,6 +112,44 @@ namespace {
 
         assert(false);
         return ultramodern::renderer::GraphicsApi::Auto;
+    }
+
+    bool is_texture_replacement_watch_file(const std::filesystem::path& path) {
+        if (path.filename() == "rt64.json") {
+            return true;
+        }
+
+        std::string extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return (extension == ".png") || (extension == ".dds");
+    }
+
+    std::filesystem::file_time_type latest_texture_replacement_write_time(const std::filesystem::path& directory) {
+        std::filesystem::file_time_type latest{};
+        std::error_code error;
+        if (!std::filesystem::is_directory(directory, error) || error) {
+            return latest;
+        }
+
+        std::filesystem::recursive_directory_iterator iterator(
+            directory,
+            std::filesystem::directory_options::skip_permission_denied,
+            error);
+        const std::filesystem::recursive_directory_iterator end;
+        while (!error && (iterator != end)) {
+            if (iterator->is_regular_file(error) && !error && is_texture_replacement_watch_file(iterator->path())) {
+                const std::filesystem::file_time_type writeTime = iterator->last_write_time(error);
+                if (!error && (writeTime > latest)) {
+                    latest = writeTime;
+                }
+            }
+
+            iterator.increment(error);
+        }
+
+        return latest;
     }
 
     void apply_user_config(RT64::Application* app, const ultramodern::renderer::GraphicsConfig& config) {
@@ -240,6 +282,7 @@ namespace {
         }
 
         void update_screen() override {
+            poll_texture_replacement_changes();
             app->updateScreen();
         }
 
@@ -270,13 +313,24 @@ namespace {
                 return false;
             }
 
-            return app->textureCache->loadReplacementDirectory(RT64::ReplacementDirectory(directory));
+            const bool loaded = app->textureCache->loadReplacementDirectory(RT64::ReplacementDirectory(directory));
+            if (loaded) {
+                texture_replacement_directory = directory;
+                texture_replacement_write_time = latest_texture_replacement_write_time(directory);
+                next_texture_replacement_scan = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
+            }
+
+            return loaded;
         }
 
         void clear_texture_replacements() override {
             if (app && app->textureCache) {
                 app->textureCache->clearReplacementDirectories();
             }
+
+            texture_replacement_directory.clear();
+            texture_replacement_write_time = {};
+            next_texture_replacement_scan = {};
         }
 
         bool start_texture_dumping(const std::filesystem::path& directory) override {
@@ -302,7 +356,30 @@ namespace {
         }
 
     private:
+        void poll_texture_replacement_changes() {
+            if (!app || !app->textureCache || texture_replacement_directory.empty()) {
+                return;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (now < next_texture_replacement_scan) {
+                return;
+            }
+
+            next_texture_replacement_scan = now + std::chrono::milliseconds(750);
+            const std::filesystem::file_time_type latestWriteTime = latest_texture_replacement_write_time(texture_replacement_directory);
+            if (latestWriteTime == texture_replacement_write_time) {
+                return;
+            }
+
+            texture_replacement_write_time = latestWriteTime;
+            app->textureCache->loadReplacementDirectory(RT64::ReplacementDirectory(texture_replacement_directory));
+        }
+
         std::unique_ptr<RT64::Application> app;
+        std::filesystem::path texture_replacement_directory;
+        std::filesystem::file_time_type texture_replacement_write_time{};
+        std::chrono::steady_clock::time_point next_texture_replacement_scan{};
     };
 }
 

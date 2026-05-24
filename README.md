@@ -7,7 +7,10 @@ This repository does not include ROM files, extracted ROM assets, save files, or
 ## Runtime Notes
 
 - Press F1 in-game to show or hide the early Windows menu bar for File, Graphics, and Controls.
+- Press F8 in-game to open Texture Replacement. Easy mode dumps newly seen textures as editable PNG files under `textures/<category>/unassigned/`.
 - Press F10 in-game to show or hide the VI/FPS counter.
+
+Texture replacement folders are local runtime data. Keep texture packs, dumped PNGs, ROM files, and the `user` folder out of commits unless a future legal texture pack is intentionally authored from scratch.
 
 ## Legal ROM Requirement
 
