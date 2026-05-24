@@ -70,6 +70,73 @@ namespace {
         }
     }
 
+    RT64::UserConfiguration::Resolution to_rt64(ultramodern::renderer::Resolution option) {
+        switch (option) {
+        case ultramodern::renderer::Resolution::Original:
+            return RT64::UserConfiguration::Resolution::Original;
+        case ultramodern::renderer::Resolution::Original2x:
+        case ultramodern::renderer::Resolution::Manual:
+            return RT64::UserConfiguration::Resolution::Manual;
+        case ultramodern::renderer::Resolution::Auto:
+        default:
+            return RT64::UserConfiguration::Resolution::WindowIntegerScale;
+        }
+    }
+
+    RT64::UserConfiguration::Filtering to_rt64(ultramodern::renderer::TextureFiltering option) {
+        switch (option) {
+        case ultramodern::renderer::TextureFiltering::Nearest:
+            return RT64::UserConfiguration::Filtering::Nearest;
+        case ultramodern::renderer::TextureFiltering::Linear:
+            return RT64::UserConfiguration::Filtering::Linear;
+        case ultramodern::renderer::TextureFiltering::PixelScaling:
+        default:
+            return RT64::UserConfiguration::Filtering::AntiAliasedPixelScaling;
+        }
+    }
+
+    RT64::UserConfiguration::Upscale2D to_rt64(ultramodern::renderer::Upscale2D option) {
+        switch (option) {
+        case ultramodern::renderer::Upscale2D::Original:
+            return RT64::UserConfiguration::Upscale2D::Original;
+        case ultramodern::renderer::Upscale2D::All:
+            return RT64::UserConfiguration::Upscale2D::All;
+        case ultramodern::renderer::Upscale2D::ScaledOnly:
+        default:
+            return RT64::UserConfiguration::Upscale2D::ScaledOnly;
+        }
+    }
+
+    RT64::UserConfiguration::RefreshRate to_rt64(ultramodern::renderer::RefreshRate option) {
+        switch (option) {
+        case ultramodern::renderer::RefreshRate::Display:
+            return RT64::UserConfiguration::RefreshRate::Display;
+        case ultramodern::renderer::RefreshRate::Manual:
+            return RT64::UserConfiguration::RefreshRate::Manual;
+        case ultramodern::renderer::RefreshRate::Original:
+        default:
+            return RT64::UserConfiguration::RefreshRate::Original;
+        }
+    }
+
+    RT64::UserConfiguration::HardwareResolve to_rt64(ultramodern::renderer::HardwareResolve option) {
+        switch (option) {
+        case ultramodern::renderer::HardwareResolve::On:
+            return RT64::UserConfiguration::HardwareResolve::Enabled;
+        case ultramodern::renderer::HardwareResolve::Off:
+            return RT64::UserConfiguration::HardwareResolve::Disabled;
+        case ultramodern::renderer::HardwareResolve::Auto:
+        default:
+            return RT64::UserConfiguration::HardwareResolve::Automatic;
+        }
+    }
+
+    RT64::UserConfiguration::DisplayBuffering to_rt64(ultramodern::renderer::DisplayBuffering option) {
+        return option == ultramodern::renderer::DisplayBuffering::Double
+            ? RT64::UserConfiguration::DisplayBuffering::Double
+            : RT64::UserConfiguration::DisplayBuffering::Triple;
+    }
+
     RT64::UserConfiguration::InternalColorFormat to_rt64(ultramodern::renderer::HighPrecisionFramebuffer option) {
         switch (option) {
         case ultramodern::renderer::HighPrecisionFramebuffer::On:
@@ -154,15 +221,22 @@ namespace {
     }
 
     void apply_user_config(RT64::Application* app, const ultramodern::renderer::GraphicsConfig& config) {
-        app->userConfig.resolution = RT64::UserConfiguration::Resolution::WindowIntegerScale;
-        app->userConfig.downsampleMultiplier = 1;
+        app->userConfig.resolution = to_rt64(config.res_option);
+        app->userConfig.resolutionMultiplier = config.res_option == ultramodern::renderer::Resolution::Original2x
+            ? 2.0
+            : std::clamp(config.resolution_multiplier, 1.0, 32.0);
+        app->userConfig.downsampleMultiplier = std::clamp(config.ds_option, 1, 32);
         app->userConfig.extAspectRatio = RT64::UserConfiguration::AspectRatio::Original;
         app->userConfig.aspectRatio = to_rt64(config.ar_option);
         app->userConfig.antialiasing = to_rt64(config.msaa_option);
-        app->userConfig.refreshRate = RT64::UserConfiguration::RefreshRate::Original;
-        app->userConfig.refreshRateTarget = 60;
+        app->userConfig.filtering = to_rt64(config.filtering_option);
+        app->userConfig.upscale2D = to_rt64(config.upscale_2d);
+        app->userConfig.threePointFiltering = config.three_point_filtering;
+        app->userConfig.refreshRate = to_rt64(config.rr_option);
+        app->userConfig.refreshRateTarget = std::clamp(config.rr_manual_value, 10, 1000);
         app->userConfig.internalColorFormat = to_rt64(config.hpfb_option);
-        app->userConfig.displayBuffering = RT64::UserConfiguration::DisplayBuffering::Triple;
+        app->userConfig.displayBuffering = to_rt64(config.display_buffering);
+        app->userConfig.hardwareResolve = to_rt64(config.hardware_resolve);
 
         switch (config.api_option) {
         case ultramodern::renderer::GraphicsApi::D3D12:
@@ -245,6 +319,10 @@ namespace {
                 app.reset();
                 return;
             }
+            app->updateSamplerAnisotropy(std::clamp(config.anisotropic_filtering, 1, 16));
+            if (config.wm_option == ultramodern::renderer::WindowMode::Fullscreen) {
+                app->setFullScreen(true);
+            }
 
             default_texture_replacement_directory = ultramodern::get_startup_texture_replacement_directory();
         }
@@ -261,13 +339,24 @@ namespace {
             apply_user_config(app.get(), new_config);
             const bool discard_fbs =
                 (new_config.res_option != old_config.res_option) ||
+                (new_config.resolution_multiplier != old_config.resolution_multiplier) ||
                 (new_config.ar_option != old_config.ar_option) ||
                 (new_config.msaa_option != old_config.msaa_option) ||
                 (new_config.hpfb_option != old_config.hpfb_option) ||
-                (new_config.ds_option != old_config.ds_option);
+                (new_config.ds_option != old_config.ds_option) ||
+                (new_config.filtering_option != old_config.filtering_option) ||
+                (new_config.upscale_2d != old_config.upscale_2d) ||
+                (new_config.three_point_filtering != old_config.three_point_filtering) ||
+                (new_config.hardware_resolve != old_config.hardware_resolve);
             app->updateUserConfig(discard_fbs);
             if (new_config.msaa_option != old_config.msaa_option) {
                 app->updateMultisampling();
+            }
+            if (new_config.anisotropic_filtering != old_config.anisotropic_filtering) {
+                app->updateSamplerAnisotropy(std::clamp(new_config.anisotropic_filtering, 1, 16));
+            }
+            if (new_config.wm_option != old_config.wm_option) {
+                app->setFullScreen(new_config.wm_option == ultramodern::renderer::WindowMode::Fullscreen);
             }
             return true;
         }

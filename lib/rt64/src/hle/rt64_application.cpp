@@ -5,6 +5,7 @@
 #include "rt64_application.h"
 #include "rhi/rt64_render_hooks.h"
 
+#include <algorithm>
 #include <filesystem>
 
 #include "common/rt64_dynamic_libraries.h"
@@ -274,6 +275,7 @@ namespace RT64 {
         // Create the shader library.
         const RenderMultisampling multisampling = RasterShader::generateMultisamplingPattern(userConfig.msaaSampleCount(), device->getCapabilities().sampleLocations);
         shaderLibrary = std::make_unique<ShaderLibrary>(usesHDR, usesHardwareResolve);
+        shaderLibrary->maxAnisotropy = 16;
         shaderLibrary->setupCommonShaders(renderInterface.get(), device.get());
         shaderLibrary->setupMultisamplingShaders(renderInterface.get(), device.get(), multisampling);
 
@@ -479,6 +481,27 @@ namespace RT64 {
         state->updateMultisampling();
 
         // Wait for all pipelines of the ubershader to be ready again.
+        rasterShaderCache->shaderUber->waitForPipelineCreation();
+    }
+
+    void Application::updateSamplerAnisotropy(uint32_t maxAnisotropy) {
+        if (!shaderLibrary || !rasterShaderCache) {
+            return;
+        }
+
+        const uint32_t clampedMaxAnisotropy = std::clamp<uint32_t>(maxAnisotropy, 1, 16);
+        if (shaderLibrary->maxAnisotropy == clampedMaxAnisotropy) {
+            return;
+        }
+
+        destroyShaderCache();
+
+        shaderLibrary->maxAnisotropy = clampedMaxAnisotropy;
+        shaderLibrary->setupCommonShaders(renderInterface.get(), device.get());
+
+        const RenderMultisampling multisampling = RasterShader::generateMultisamplingPattern(userConfig.msaaSampleCount(), device->getCapabilities().sampleLocations);
+        shaderLibrary->setupMultisamplingShaders(renderInterface.get(), device.get(), multisampling);
+        rasterShaderCache->setup(device.get(), renderInterface->getCapabilities().shaderFormat, shaderLibrary.get(), multisampling);
         rasterShaderCache->shaderUber->waitForPipelineCreation();
     }
 

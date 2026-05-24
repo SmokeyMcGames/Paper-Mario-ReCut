@@ -4,15 +4,18 @@
 #include <chrono>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
 #include <fstream>
 #include <filesystem>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #define SDL_MAIN_HANDLED
@@ -76,6 +79,134 @@ namespace {
     constexpr uint32_t bytes_per_input_frame = input_channels * sizeof(float);
     std::atomic_bool texture_dump_input_paused = false;
 
+    enum class InputAction : int {
+        N64A,
+        N64B,
+        Start,
+        Z,
+        L,
+        R,
+        CUp,
+        CDown,
+        CLeft,
+        CRight,
+        DPadUp,
+        DPadDown,
+        DPadLeft,
+        DPadRight,
+        StickUp,
+        StickDown,
+        StickLeft,
+        StickRight,
+        Count
+    };
+
+    constexpr int input_action_count = static_cast<int>(InputAction::Count);
+
+    struct InputActionDescriptor {
+        InputAction action;
+        const wchar_t* label;
+        uint16_t button;
+        int axis_x;
+        int axis_y;
+    };
+
+    constexpr std::array<InputActionDescriptor, input_action_count> input_actions{ {
+        { InputAction::N64A, L"A Button", A_BUTTON, 0, 0 },
+        { InputAction::N64B, L"B Button", B_BUTTON, 0, 0 },
+        { InputAction::Start, L"Start", START_BUTTON, 0, 0 },
+        { InputAction::Z, L"Z Trigger", Z_BUTTON, 0, 0 },
+        { InputAction::L, L"L Trigger", L_TRIG, 0, 0 },
+        { InputAction::R, L"R Trigger", R_TRIG, 0, 0 },
+        { InputAction::CUp, L"C Up", U_CBUTTONS, 0, 0 },
+        { InputAction::CDown, L"C Down", D_CBUTTONS, 0, 0 },
+        { InputAction::CLeft, L"C Left", L_CBUTTONS, 0, 0 },
+        { InputAction::CRight, L"C Right", R_CBUTTONS, 0, 0 },
+        { InputAction::DPadUp, L"D-Pad Up", U_JPAD, 0, 0 },
+        { InputAction::DPadDown, L"D-Pad Down", D_JPAD, 0, 0 },
+        { InputAction::DPadLeft, L"D-Pad Left", L_JPAD, 0, 0 },
+        { InputAction::DPadRight, L"D-Pad Right", R_JPAD, 0, 0 },
+        { InputAction::StickUp, L"Stick Up", 0, 0, 1 },
+        { InputAction::StickDown, L"Stick Down", 0, 0, -1 },
+        { InputAction::StickLeft, L"Stick Left", 0, -1, 0 },
+        { InputAction::StickRight, L"Stick Right", 0, 1, 0 }
+    } };
+
+    enum class GamepadBindingKind {
+        Button,
+        AxisPositive,
+        AxisNegative
+    };
+
+    struct GamepadBinding {
+        GamepadBindingKind kind = GamepadBindingKind::Button;
+        int code = SDL_CONTROLLER_BUTTON_INVALID;
+    };
+
+    struct AudioSettings {
+        int volume_percent = 50;
+        bool muted = false;
+        uint32_t output_rate = 48000;
+        uint16_t buffer_samples = 256;
+    };
+
+    struct AppInputSettings {
+        int preferred_controller_index = 0;
+        bool mouse_click_to_move = false;
+        std::array<SDL_Scancode, input_action_count> keyboard_bindings{};
+        std::array<GamepadBinding, input_action_count> gamepad_bindings{};
+    };
+
+    AppInputSettings make_default_input_settings() {
+        AppInputSettings settings{};
+        settings.keyboard_bindings = {
+            SDL_SCANCODE_Z,
+            SDL_SCANCODE_X,
+            SDL_SCANCODE_RETURN,
+            SDL_SCANCODE_LSHIFT,
+            SDL_SCANCODE_Q,
+            SDL_SCANCODE_E,
+            SDL_SCANCODE_I,
+            SDL_SCANCODE_K,
+            SDL_SCANCODE_J,
+            SDL_SCANCODE_L,
+            SDL_SCANCODE_W,
+            SDL_SCANCODE_S,
+            SDL_SCANCODE_A,
+            SDL_SCANCODE_D,
+            SDL_SCANCODE_UP,
+            SDL_SCANCODE_DOWN,
+            SDL_SCANCODE_LEFT,
+            SDL_SCANCODE_RIGHT
+        };
+        settings.gamepad_bindings = {
+            GamepadBinding{ GamepadBindingKind::Button, SDL_CONTROLLER_BUTTON_A },
+            GamepadBinding{ GamepadBindingKind::Button, SDL_CONTROLLER_BUTTON_X },
+            GamepadBinding{ GamepadBindingKind::Button, SDL_CONTROLLER_BUTTON_START },
+            GamepadBinding{ GamepadBindingKind::AxisPositive, SDL_CONTROLLER_AXIS_TRIGGERLEFT },
+            GamepadBinding{ GamepadBindingKind::Button, SDL_CONTROLLER_BUTTON_LEFTSHOULDER },
+            GamepadBinding{ GamepadBindingKind::Button, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER },
+            GamepadBinding{ GamepadBindingKind::AxisNegative, SDL_CONTROLLER_AXIS_RIGHTY },
+            GamepadBinding{ GamepadBindingKind::AxisPositive, SDL_CONTROLLER_AXIS_RIGHTY },
+            GamepadBinding{ GamepadBindingKind::AxisNegative, SDL_CONTROLLER_AXIS_RIGHTX },
+            GamepadBinding{ GamepadBindingKind::AxisPositive, SDL_CONTROLLER_AXIS_RIGHTX },
+            GamepadBinding{ GamepadBindingKind::Button, SDL_CONTROLLER_BUTTON_DPAD_UP },
+            GamepadBinding{ GamepadBindingKind::Button, SDL_CONTROLLER_BUTTON_DPAD_DOWN },
+            GamepadBinding{ GamepadBindingKind::Button, SDL_CONTROLLER_BUTTON_DPAD_LEFT },
+            GamepadBinding{ GamepadBindingKind::Button, SDL_CONTROLLER_BUTTON_DPAD_RIGHT },
+            GamepadBinding{ GamepadBindingKind::AxisNegative, SDL_CONTROLLER_AXIS_LEFTY },
+            GamepadBinding{ GamepadBindingKind::AxisPositive, SDL_CONTROLLER_AXIS_LEFTY },
+            GamepadBinding{ GamepadBindingKind::AxisNegative, SDL_CONTROLLER_AXIS_LEFTX },
+            GamepadBinding{ GamepadBindingKind::AxisPositive, SDL_CONTROLLER_AXIS_LEFTX }
+        };
+        return settings;
+    }
+
+    std::mutex settings_mutex;
+    AudioSettings audio_settings{};
+    AppInputSettings input_settings = make_default_input_settings();
+    int active_controller_device_index = -1;
+
     void show_message(const char* msg);
     void show_info_message(const char* msg);
     std::filesystem::path app_base_path();
@@ -86,6 +217,11 @@ namespace {
     std::filesystem::path texture_dump_path();
     bool ensure_texture_folder_layout();
     bool ensure_texture_replacement_database(const std::filesystem::path& directory);
+    std::filesystem::path app_settings_path();
+    void load_recut_settings();
+    void save_recut_settings();
+    void reset_audio(uint32_t output_freq);
+    void select_controller_index(int device_index);
 
 #ifdef _WIN32
     HWND main_window = nullptr;
@@ -101,8 +237,39 @@ namespace {
     HWND texture_dump_button = nullptr;
     HWND texture_dump_progress = nullptr;
     HWND texture_status_label = nullptr;
+    HWND graphics_options_window = nullptr;
+    HWND graphics_resolution_combo = nullptr;
+    HWND graphics_aspect_combo = nullptr;
+    HWND graphics_filter_combo = nullptr;
+    HWND graphics_anisotropic_combo = nullptr;
+    HWND graphics_msaa_combo = nullptr;
+    HWND graphics_downsample_combo = nullptr;
+    HWND graphics_framebuffer_combo = nullptr;
+    HWND graphics_refresh_combo = nullptr;
+    HWND graphics_upscale_2d_combo = nullptr;
+    HWND graphics_hardware_resolve_combo = nullptr;
+    HWND graphics_fullscreen_checkbox = nullptr;
+    HWND graphics_three_point_checkbox = nullptr;
+    HWND audio_options_window = nullptr;
+    HWND audio_volume_combo = nullptr;
+    HWND audio_rate_combo = nullptr;
+    HWND audio_buffer_combo = nullptr;
+    HWND audio_mute_checkbox = nullptr;
+    HWND input_options_window = nullptr;
+    HWND input_tab_control = nullptr;
+    HWND input_gamepad_page = nullptr;
+    HWND input_keyboard_page = nullptr;
+    HWND input_controller_combo = nullptr;
+    HWND input_profile_label = nullptr;
+    HWND input_gamepad_action_combo = nullptr;
+    HWND input_gamepad_binding_combo = nullptr;
+    HWND input_keyboard_action_combo = nullptr;
+    HWND input_keyboard_binding_combo = nullptr;
+    HWND input_mouse_checkbox = nullptr;
     bool texture_live_replacement_enabled = false;
     bool texture_dump_pass_active = false;
+    AppInputSettings input_window_pending_settings = make_default_input_settings();
+    bool input_window_pending_valid = false;
     std::chrono::steady_clock::time_point texture_dump_pass_started = std::chrono::steady_clock::now();
     std::atomic<uint32_t> fps_vi_ticks{0};
     uint64_t fps_last_presented_frames = 0;
@@ -121,11 +288,21 @@ namespace {
     constexpr UINT_PTR menu_command_controller_setup = 40040;
     constexpr UINT_PTR menu_command_rebind_keys = 40041;
     constexpr UINT_PTR menu_command_input_profiles = 40042;
+    constexpr UINT_PTR menu_command_audio_options = 40060;
     constexpr UINT_PTR texture_command_live_replacement = 40100;
     constexpr UINT_PTR texture_command_reload = 40101;
     constexpr UINT_PTR texture_command_open_folder = 40102;
     constexpr UINT_PTR texture_command_dump_textures = 40103;
     constexpr UINT_PTR texture_dump_timer = 40200;
+    constexpr UINT_PTR graphics_command_apply = 40300;
+    constexpr UINT_PTR graphics_command_close = 40301;
+    constexpr UINT_PTR audio_command_apply = 40400;
+    constexpr UINT_PTR audio_command_close = 40401;
+    constexpr UINT_PTR input_command_apply = 40500;
+    constexpr UINT_PTR input_command_close = 40501;
+    constexpr UINT_PTR input_command_apply_profile = 40502;
+    constexpr UINT_PTR input_command_stage_gamepad_binding = 40503;
+    constexpr UINT_PTR input_command_stage_keyboard_binding = 40504;
 
     constexpr uint8_t menu_hint_max_alpha = 220;
     constexpr double texture_dump_pass_seconds = 8.0;
@@ -140,7 +317,13 @@ namespace {
     void set_app_menu_bar_visible(bool visible);
     void hide_menu_hint_overlay();
     void show_texture_replacement_window();
+    void show_graphics_options_window();
+    void show_audio_options_window();
+    void show_input_options_window();
     void destroy_texture_replacement_window();
+    void destroy_graphics_options_window();
+    void destroy_audio_options_window();
+    void destroy_input_options_window();
     void refresh_texture_replacement_window();
     void update_texture_dump_progress();
     bool handle_menu_command(UINT_PTR command, HWND hwnd);
@@ -194,25 +377,28 @@ namespace {
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
             return true;
         case menu_command_graphics_options:
-            show_info_message("Graphics options will live here as Paper Mario ReCut grows.");
+            show_graphics_options_window();
             return true;
         case menu_command_fullscreen:
-            show_info_message("Fullscreen controls will be added to the graphics menu.");
+            show_graphics_options_window();
             return true;
         case menu_command_resolution:
-            show_info_message("Resolution and scaling controls will be added to the graphics menu.");
+            show_graphics_options_window();
             return true;
         case menu_command_texture_replacement:
             show_texture_replacement_window();
             return true;
         case menu_command_controller_setup:
-            show_info_message("Full controller setup will live here.");
+            show_input_options_window();
             return true;
         case menu_command_rebind_keys:
-            show_info_message("Keyboard and controller rebinding will be added here.");
+            show_input_options_window();
             return true;
         case menu_command_input_profiles:
-            show_info_message("Input profiles will be added with the rebinding system.");
+            show_input_options_window();
+            return true;
+        case menu_command_audio_options:
+            show_audio_options_window();
             return true;
         default:
             return false;
@@ -341,6 +527,10 @@ namespace {
         AppendMenuW(graphics_menu, MF_STRING, menu_command_fullscreen, L"&Fullscreen...");
         AppendMenuW(graphics_menu, MF_STRING, menu_command_resolution, L"&Resolution / Scaling...");
         AppendMenuW(app_menu_bar, MF_POPUP, reinterpret_cast<UINT_PTR>(graphics_menu), L"&Graphics");
+
+        HMENU audio_menu = CreatePopupMenu();
+        AppendMenuW(audio_menu, MF_STRING, menu_command_audio_options, L"&Audio Options...");
+        AppendMenuW(app_menu_bar, MF_POPUP, reinterpret_cast<UINT_PTR>(audio_menu), L"&Audio");
 
         HMENU controls_menu = CreatePopupMenu();
         AppendMenuW(controls_menu, MF_STRING, menu_command_controller_setup, L"&Controller Setup...");
@@ -577,6 +767,1127 @@ namespace {
                 status = L"Live replacement starting.";
             }
             SetWindowTextW(texture_status_label, status);
+        }
+    }
+
+    struct ResolutionChoice {
+        std::wstring label;
+        ultramodern::renderer::Resolution option;
+        double multiplier;
+    };
+
+    struct ComboIntChoice {
+        const wchar_t* label;
+        int value;
+    };
+
+    std::vector<ResolutionChoice> graphics_resolution_choices;
+    std::vector<int> input_controller_choices;
+    std::vector<GamepadBinding> gamepad_binding_choices;
+    std::vector<SDL_Scancode> keyboard_binding_choices;
+
+    const std::array<ComboIntChoice, 5> anisotropic_choices{ {
+        { L"Off", 1 },
+        { L"2x", 2 },
+        { L"4x", 4 },
+        { L"8x", 8 },
+        { L"16x", 16 }
+    } };
+
+    const std::array<ComboIntChoice, 5> audio_volume_choices{ {
+        { L"0%", 0 },
+        { L"25%", 25 },
+        { L"50%", 50 },
+        { L"100%", 100 },
+        { L"200%", 200 }
+    } };
+
+    const std::array<ComboIntChoice, 3> audio_rate_choices{ {
+        { L"44,100 Hz", 44100 },
+        { L"48,000 Hz", 48000 },
+        { L"96,000 Hz", 96000 }
+    } };
+
+    const std::array<ComboIntChoice, 5> audio_buffer_choices{ {
+        { L"128 samples", 128 },
+        { L"256 samples", 256 },
+        { L"512 samples", 512 },
+        { L"1024 samples", 1024 },
+        { L"2048 samples", 2048 }
+    } };
+
+    HFONT ui_font() {
+        static HFONT font = CreateFontW(
+            -14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        return font;
+    }
+
+    void use_ui_font(HWND hwnd) {
+        if (hwnd) {
+            SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(ui_font()), TRUE);
+            SetWindowTheme(hwnd, L"Explorer", nullptr);
+        }
+    }
+
+    HWND create_label(HWND parent, const wchar_t* text, int x, int y, int width, int height = 20) {
+        HWND label = CreateWindowExW(
+            0, L"STATIC", text,
+            WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
+            x, y, width, height,
+            parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        use_ui_font(label);
+        return label;
+    }
+
+    HWND create_combo(HWND parent, UINT_PTR id, int x, int y, int width) {
+        HWND combo = CreateWindowExW(
+            0, L"COMBOBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+            x, y, width, 200,
+            parent, reinterpret_cast<HMENU>(id), GetModuleHandleW(nullptr), nullptr);
+        use_ui_font(combo);
+        return combo;
+    }
+
+    HWND create_button(HWND parent, const wchar_t* text, UINT_PTR id, int x, int y, int width, int height = 30) {
+        HWND button = CreateWindowExW(
+            0, L"BUTTON", text,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            x, y, width, height,
+            parent, reinterpret_cast<HMENU>(id), GetModuleHandleW(nullptr), nullptr);
+        use_ui_font(button);
+        return button;
+    }
+
+    HWND create_checkbox(HWND parent, const wchar_t* text, UINT_PTR id, int x, int y, int width) {
+        HWND checkbox = CreateWindowExW(
+            0, L"BUTTON", text,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            x, y, width, 24,
+            parent, reinterpret_cast<HMENU>(id), GetModuleHandleW(nullptr), nullptr);
+        use_ui_font(checkbox);
+        return checkbox;
+    }
+
+    void combo_add(HWND combo, const wchar_t* label) {
+        SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
+    }
+
+    int combo_selection(HWND combo) {
+        return static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+    }
+
+    void combo_select_clamped(HWND combo, int index) {
+        const int count = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0));
+        if (count > 0) {
+            SendMessageW(combo, CB_SETCURSEL, std::clamp(index, 0, count - 1), 0);
+        }
+    }
+
+    template <size_t Count>
+    int find_choice_index(const std::array<ComboIntChoice, Count>& choices, int value, int fallback = 0) {
+        for (size_t i = 0; i < choices.size(); i++) {
+            if (choices[i].value == value) {
+                return static_cast<int>(i);
+            }
+        }
+        return fallback;
+    }
+
+    std::wstring utf8_to_wide(const char* text) {
+        if (text == nullptr || text[0] == '\0') {
+            return L"";
+        }
+
+        const int length = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
+        if (length <= 1) {
+            return L"";
+        }
+
+        std::wstring wide(static_cast<size_t>(length - 1), L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, text, -1, wide.data(), length);
+        return wide;
+    }
+
+    void center_dialog_on_main(HWND hwnd, int width, int height) {
+        RECT owner_rect{};
+        GetWindowRect(main_window, &owner_rect);
+        const int owner_width = static_cast<int>(owner_rect.right - owner_rect.left);
+        const int owner_height = static_cast<int>(owner_rect.bottom - owner_rect.top);
+        const int x = static_cast<int>(owner_rect.left) + std::max(0, (owner_width - width) / 2);
+        const int y = static_cast<int>(owner_rect.top) + std::max(0, (owner_height - height) / 2);
+        SetWindowPos(hwnd, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    std::vector<ResolutionChoice> enumerate_resolution_choices() {
+        std::vector<ResolutionChoice> choices{
+            { L"Auto (window integer scale)", ultramodern::renderer::Resolution::Auto, 2.0 },
+            { L"Original (320 x 240)", ultramodern::renderer::Resolution::Original, 1.0 },
+            { L"2x (640 x 480)", ultramodern::renderer::Resolution::Original2x, 2.0 }
+        };
+
+        HMONITOR monitor = MonitorFromWindow(main_window, MONITOR_DEFAULTTONEAREST);
+        MONITORINFOEXW monitor_info{};
+        monitor_info.cbSize = sizeof(monitor_info);
+        if (!GetMonitorInfoW(monitor, &monitor_info)) {
+            return choices;
+        }
+
+        std::vector<std::pair<DWORD, DWORD>> modes;
+        for (DWORD mode_index = 0;; mode_index++) {
+            DEVMODEW mode{};
+            mode.dmSize = sizeof(mode);
+            if (!EnumDisplaySettingsW(monitor_info.szDevice, mode_index, &mode)) {
+                break;
+            }
+
+            if (mode.dmPelsWidth < 320 || mode.dmPelsHeight < 240) {
+                continue;
+            }
+
+            const auto mode_pair = std::make_pair(mode.dmPelsWidth, mode.dmPelsHeight);
+            if (std::find(modes.begin(), modes.end(), mode_pair) == modes.end()) {
+                modes.push_back(mode_pair);
+            }
+        }
+
+        std::sort(modes.begin(), modes.end(), [](const auto& lhs, const auto& rhs) {
+            if (lhs.first != rhs.first) {
+                return lhs.first < rhs.first;
+            }
+            return lhs.second < rhs.second;
+        });
+
+        for (const auto& mode : modes) {
+            wchar_t label[96] = {};
+            const double multiplier = std::clamp(static_cast<double>(mode.second) / 240.0, 1.0, 32.0);
+            swprintf_s(label, L"%lu x %lu (%.2fx internal)", mode.first, mode.second, multiplier);
+            choices.push_back({ label, ultramodern::renderer::Resolution::Manual, multiplier });
+        }
+
+        return choices;
+    }
+
+    int selected_resolution_index(const ultramodern::renderer::GraphicsConfig& config) {
+        for (size_t i = 0; i < graphics_resolution_choices.size(); i++) {
+            const ResolutionChoice& choice = graphics_resolution_choices[i];
+            if (choice.option == config.res_option) {
+                if (choice.option != ultramodern::renderer::Resolution::Manual || std::abs(choice.multiplier - config.resolution_multiplier) < 0.05) {
+                    return static_cast<int>(i);
+                }
+            }
+        }
+        return 0;
+    }
+
+    void fill_graphics_options_controls() {
+        if (!graphics_options_window) {
+            return;
+        }
+
+        const auto config = ultramodern::renderer::get_graphics_config();
+        graphics_resolution_choices = enumerate_resolution_choices();
+
+        SendMessageW(graphics_resolution_combo, CB_RESETCONTENT, 0, 0);
+        for (const ResolutionChoice& choice : graphics_resolution_choices) {
+            combo_add(graphics_resolution_combo, choice.label.c_str());
+        }
+        combo_select_clamped(graphics_resolution_combo, selected_resolution_index(config));
+
+        SendMessageW(graphics_aspect_combo, CB_RESETCONTENT, 0, 0);
+        combo_add(graphics_aspect_combo, L"Original 4:3");
+        combo_add(graphics_aspect_combo, L"Expand to Window");
+        combo_select_clamped(graphics_aspect_combo, config.ar_option == ultramodern::renderer::AspectRatio::Expand ? 1 : 0);
+
+        SendMessageW(graphics_filter_combo, CB_RESETCONTENT, 0, 0);
+        combo_add(graphics_filter_combo, L"Anti-aliased Pixel Scaling");
+        combo_add(graphics_filter_combo, L"Linear");
+        combo_add(graphics_filter_combo, L"Nearest");
+        int filter_index = 0;
+        if (config.filtering_option == ultramodern::renderer::TextureFiltering::Linear) {
+            filter_index = 1;
+        }
+        else if (config.filtering_option == ultramodern::renderer::TextureFiltering::Nearest) {
+            filter_index = 2;
+        }
+        combo_select_clamped(graphics_filter_combo, filter_index);
+
+        SendMessageW(graphics_anisotropic_combo, CB_RESETCONTENT, 0, 0);
+        for (const ComboIntChoice& choice : anisotropic_choices) {
+            combo_add(graphics_anisotropic_combo, choice.label);
+        }
+        combo_select_clamped(graphics_anisotropic_combo, find_choice_index(anisotropic_choices, std::clamp(config.anisotropic_filtering, 1, 16), 4));
+
+        SendMessageW(graphics_msaa_combo, CB_RESETCONTENT, 0, 0);
+        combo_add(graphics_msaa_combo, L"Off");
+        combo_add(graphics_msaa_combo, L"2x MSAA");
+        combo_add(graphics_msaa_combo, L"4x MSAA");
+        combo_add(graphics_msaa_combo, L"8x MSAA");
+        combo_select_clamped(graphics_msaa_combo, static_cast<int>(config.msaa_option));
+
+        SendMessageW(graphics_downsample_combo, CB_RESETCONTENT, 0, 0);
+        combo_add(graphics_downsample_combo, L"Off");
+        combo_add(graphics_downsample_combo, L"2x");
+        combo_add(graphics_downsample_combo, L"4x");
+        combo_select_clamped(graphics_downsample_combo, config.ds_option >= 4 ? 2 : (config.ds_option >= 2 ? 1 : 0));
+
+        SendMessageW(graphics_framebuffer_combo, CB_RESETCONTENT, 0, 0);
+        combo_add(graphics_framebuffer_combo, L"Automatic");
+        combo_add(graphics_framebuffer_combo, L"High Precision");
+        combo_add(graphics_framebuffer_combo, L"Standard");
+        combo_select_clamped(graphics_framebuffer_combo, static_cast<int>(config.hpfb_option));
+
+        SendMessageW(graphics_refresh_combo, CB_RESETCONTENT, 0, 0);
+        combo_add(graphics_refresh_combo, L"Original");
+        combo_add(graphics_refresh_combo, L"Display");
+        combo_add(graphics_refresh_combo, L"60 Hz");
+        combo_add(graphics_refresh_combo, L"120 Hz");
+        combo_add(graphics_refresh_combo, L"144 Hz");
+        int refresh_index = static_cast<int>(config.rr_option);
+        if (config.rr_option == ultramodern::renderer::RefreshRate::Manual) {
+            refresh_index = config.rr_manual_value >= 144 ? 4 : (config.rr_manual_value >= 120 ? 3 : 2);
+        }
+        combo_select_clamped(graphics_refresh_combo, refresh_index);
+
+        SendMessageW(graphics_upscale_2d_combo, CB_RESETCONTENT, 0, 0);
+        combo_add(graphics_upscale_2d_combo, L"Scaled 2D Only");
+        combo_add(graphics_upscale_2d_combo, L"All 2D");
+        combo_add(graphics_upscale_2d_combo, L"Original 2D");
+        int upscale_index = 0;
+        if (config.upscale_2d == ultramodern::renderer::Upscale2D::All) {
+            upscale_index = 1;
+        }
+        else if (config.upscale_2d == ultramodern::renderer::Upscale2D::Original) {
+            upscale_index = 2;
+        }
+        combo_select_clamped(graphics_upscale_2d_combo, upscale_index);
+
+        SendMessageW(graphics_hardware_resolve_combo, CB_RESETCONTENT, 0, 0);
+        combo_add(graphics_hardware_resolve_combo, L"Automatic");
+        combo_add(graphics_hardware_resolve_combo, L"Enabled");
+        combo_add(graphics_hardware_resolve_combo, L"Disabled");
+        int hardware_index = 0;
+        if (config.hardware_resolve == ultramodern::renderer::HardwareResolve::On) {
+            hardware_index = 1;
+        }
+        else if (config.hardware_resolve == ultramodern::renderer::HardwareResolve::Off) {
+            hardware_index = 2;
+        }
+        combo_select_clamped(graphics_hardware_resolve_combo, hardware_index);
+
+        CheckDlgButton(graphics_options_window, static_cast<int>(menu_command_fullscreen), config.wm_option == ultramodern::renderer::WindowMode::Fullscreen ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(graphics_options_window, static_cast<int>(graphics_command_apply + 20), config.three_point_filtering ? BST_CHECKED : BST_UNCHECKED);
+    }
+
+    void apply_graphics_options() {
+        if (!graphics_options_window) {
+            return;
+        }
+
+        auto config = ultramodern::renderer::get_graphics_config();
+        const int resolution_index = combo_selection(graphics_resolution_combo);
+        if (resolution_index >= 0 && resolution_index < static_cast<int>(graphics_resolution_choices.size())) {
+            const ResolutionChoice& choice = graphics_resolution_choices[resolution_index];
+            config.res_option = choice.option;
+            config.resolution_multiplier = choice.multiplier;
+        }
+
+        config.wm_option = IsDlgButtonChecked(graphics_options_window, static_cast<int>(menu_command_fullscreen)) == BST_CHECKED
+            ? ultramodern::renderer::WindowMode::Fullscreen
+            : ultramodern::renderer::WindowMode::Windowed;
+        config.ar_option = combo_selection(graphics_aspect_combo) == 1
+            ? ultramodern::renderer::AspectRatio::Expand
+            : ultramodern::renderer::AspectRatio::Original;
+
+        switch (combo_selection(graphics_filter_combo)) {
+        case 1:
+            config.filtering_option = ultramodern::renderer::TextureFiltering::Linear;
+            break;
+        case 2:
+            config.filtering_option = ultramodern::renderer::TextureFiltering::Nearest;
+            break;
+        default:
+            config.filtering_option = ultramodern::renderer::TextureFiltering::PixelScaling;
+            break;
+        }
+
+        const int anisotropic_index = combo_selection(graphics_anisotropic_combo);
+        if (anisotropic_index >= 0 && anisotropic_index < static_cast<int>(anisotropic_choices.size())) {
+            config.anisotropic_filtering = anisotropic_choices[anisotropic_index].value;
+        }
+
+        switch (combo_selection(graphics_msaa_combo)) {
+        case 1:
+            config.msaa_option = ultramodern::renderer::Antialiasing::MSAA2X;
+            break;
+        case 2:
+            config.msaa_option = ultramodern::renderer::Antialiasing::MSAA4X;
+            break;
+        case 3:
+            config.msaa_option = ultramodern::renderer::Antialiasing::MSAA8X;
+            break;
+        default:
+            config.msaa_option = ultramodern::renderer::Antialiasing::None;
+            break;
+        }
+
+        switch (combo_selection(graphics_downsample_combo)) {
+        case 1:
+            config.ds_option = 2;
+            break;
+        case 2:
+            config.ds_option = 4;
+            break;
+        default:
+            config.ds_option = 1;
+            break;
+        }
+
+        config.hpfb_option = static_cast<ultramodern::renderer::HighPrecisionFramebuffer>(std::clamp(combo_selection(graphics_framebuffer_combo), 0, 2));
+
+        switch (combo_selection(graphics_refresh_combo)) {
+        case 1:
+            config.rr_option = ultramodern::renderer::RefreshRate::Display;
+            break;
+        case 2:
+            config.rr_option = ultramodern::renderer::RefreshRate::Manual;
+            config.rr_manual_value = 60;
+            break;
+        case 3:
+            config.rr_option = ultramodern::renderer::RefreshRate::Manual;
+            config.rr_manual_value = 120;
+            break;
+        case 4:
+            config.rr_option = ultramodern::renderer::RefreshRate::Manual;
+            config.rr_manual_value = 144;
+            break;
+        default:
+            config.rr_option = ultramodern::renderer::RefreshRate::Original;
+            config.rr_manual_value = 60;
+            break;
+        }
+
+        switch (combo_selection(graphics_upscale_2d_combo)) {
+        case 1:
+            config.upscale_2d = ultramodern::renderer::Upscale2D::All;
+            break;
+        case 2:
+            config.upscale_2d = ultramodern::renderer::Upscale2D::Original;
+            break;
+        default:
+            config.upscale_2d = ultramodern::renderer::Upscale2D::ScaledOnly;
+            break;
+        }
+
+        switch (combo_selection(graphics_hardware_resolve_combo)) {
+        case 1:
+            config.hardware_resolve = ultramodern::renderer::HardwareResolve::On;
+            break;
+        case 2:
+            config.hardware_resolve = ultramodern::renderer::HardwareResolve::Off;
+            break;
+        default:
+            config.hardware_resolve = ultramodern::renderer::HardwareResolve::Auto;
+            break;
+        }
+
+        config.three_point_filtering = IsDlgButtonChecked(graphics_options_window, static_cast<int>(graphics_command_apply + 20)) == BST_CHECKED;
+        ultramodern::renderer::set_graphics_config(config);
+        save_recut_settings();
+    }
+
+    LRESULT CALLBACK graphics_options_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+        switch (message) {
+        case WM_CREATE:
+            EnableThemeDialogTexture(hwnd, ETDT_ENABLETAB);
+            create_label(hwnd, L"Internal resolution", 18, 18, 150);
+            graphics_resolution_combo = create_combo(hwnd, menu_command_resolution, 178, 14, 270);
+            create_label(hwnd, L"Aspect ratio", 18, 54, 150);
+            graphics_aspect_combo = create_combo(hwnd, menu_command_resolution + 1, 178, 50, 270);
+            create_label(hwnd, L"Texture filtering", 18, 90, 150);
+            graphics_filter_combo = create_combo(hwnd, menu_command_resolution + 2, 178, 86, 270);
+            create_label(hwnd, L"Anisotropic filtering", 18, 126, 150);
+            graphics_anisotropic_combo = create_combo(hwnd, menu_command_resolution + 3, 178, 122, 270);
+            create_label(hwnd, L"Anti-aliasing", 18, 162, 150);
+            graphics_msaa_combo = create_combo(hwnd, menu_command_resolution + 4, 178, 158, 270);
+            create_label(hwnd, L"Downsample", 18, 198, 150);
+            graphics_downsample_combo = create_combo(hwnd, menu_command_resolution + 5, 178, 194, 270);
+            create_label(hwnd, L"Framebuffer", 18, 234, 150);
+            graphics_framebuffer_combo = create_combo(hwnd, menu_command_resolution + 6, 178, 230, 270);
+            create_label(hwnd, L"Refresh rate", 18, 270, 150);
+            graphics_refresh_combo = create_combo(hwnd, menu_command_resolution + 7, 178, 266, 270);
+            create_label(hwnd, L"2D upscaling", 18, 306, 150);
+            graphics_upscale_2d_combo = create_combo(hwnd, menu_command_resolution + 8, 178, 302, 270);
+            create_label(hwnd, L"Hardware resolve", 18, 342, 150);
+            graphics_hardware_resolve_combo = create_combo(hwnd, menu_command_resolution + 9, 178, 338, 270);
+            graphics_fullscreen_checkbox = create_checkbox(hwnd, L"Fullscreen", menu_command_fullscreen, 178, 374, 140);
+            graphics_three_point_checkbox = create_checkbox(hwnd, L"Three-point filtering", graphics_command_apply + 20, 318, 374, 170);
+            create_button(hwnd, L"Apply", graphics_command_apply, 286, 416, 88);
+            create_button(hwnd, L"Close", graphics_command_close, 384, 416, 88);
+            fill_graphics_options_controls();
+            return 0;
+        case WM_CTLCOLORSTATIC: {
+            HDC dc = reinterpret_cast<HDC>(wparam);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+        }
+        case WM_COMMAND:
+            switch (LOWORD(wparam)) {
+            case graphics_command_apply:
+                apply_graphics_options();
+                return 0;
+            case graphics_command_close:
+                ShowWindow(hwnd, SW_HIDE);
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        case WM_DESTROY:
+            graphics_options_window = nullptr;
+            graphics_resolution_combo = nullptr;
+            graphics_aspect_combo = nullptr;
+            graphics_filter_combo = nullptr;
+            graphics_anisotropic_combo = nullptr;
+            graphics_msaa_combo = nullptr;
+            graphics_downsample_combo = nullptr;
+            graphics_framebuffer_combo = nullptr;
+            graphics_refresh_combo = nullptr;
+            graphics_upscale_2d_combo = nullptr;
+            graphics_hardware_resolve_combo = nullptr;
+            graphics_fullscreen_checkbox = nullptr;
+            graphics_three_point_checkbox = nullptr;
+            return 0;
+        }
+
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
+    void show_graphics_options_window() {
+        if (!main_window) {
+            return;
+        }
+
+        if (!graphics_options_window) {
+            const wchar_t* class_name = L"PaperMarioReCutGraphicsOptions";
+            static bool registered = false;
+            if (!registered) {
+                WNDCLASSW window_class{};
+                window_class.lpfnWndProc = graphics_options_window_proc;
+                window_class.hInstance = GetModuleHandleW(nullptr);
+                window_class.lpszClassName = class_name;
+                window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+                window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+                RegisterClassW(&window_class);
+                registered = true;
+            }
+
+            graphics_options_window = CreateWindowExW(
+                WS_EX_DLGMODALFRAME,
+                class_name,
+                L"Graphics Options",
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                CW_USEDEFAULT, CW_USEDEFAULT, 500, 500,
+                main_window,
+                nullptr,
+                GetModuleHandleW(nullptr),
+                nullptr);
+            center_dialog_on_main(graphics_options_window, 500, 500);
+        }
+        else {
+            fill_graphics_options_controls();
+        }
+
+        ShowWindow(graphics_options_window, SW_SHOWNORMAL);
+        SetForegroundWindow(graphics_options_window);
+    }
+
+    void destroy_graphics_options_window() {
+        if (graphics_options_window) {
+            DestroyWindow(graphics_options_window);
+            graphics_options_window = nullptr;
+        }
+    }
+
+    void fill_audio_options_controls() {
+        AudioSettings settings_snapshot{};
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            settings_snapshot = audio_settings;
+        }
+
+        SendMessageW(audio_volume_combo, CB_RESETCONTENT, 0, 0);
+        for (const ComboIntChoice& choice : audio_volume_choices) {
+            combo_add(audio_volume_combo, choice.label);
+        }
+        combo_select_clamped(audio_volume_combo, find_choice_index(audio_volume_choices, settings_snapshot.volume_percent, 2));
+
+        SendMessageW(audio_rate_combo, CB_RESETCONTENT, 0, 0);
+        for (const ComboIntChoice& choice : audio_rate_choices) {
+            combo_add(audio_rate_combo, choice.label);
+        }
+        combo_select_clamped(audio_rate_combo, find_choice_index(audio_rate_choices, static_cast<int>(settings_snapshot.output_rate), 1));
+
+        SendMessageW(audio_buffer_combo, CB_RESETCONTENT, 0, 0);
+        for (const ComboIntChoice& choice : audio_buffer_choices) {
+            combo_add(audio_buffer_combo, choice.label);
+        }
+        combo_select_clamped(audio_buffer_combo, find_choice_index(audio_buffer_choices, static_cast<int>(settings_snapshot.buffer_samples), 1));
+        CheckDlgButton(audio_options_window, static_cast<int>(audio_command_apply + 10), settings_snapshot.muted ? BST_CHECKED : BST_UNCHECKED);
+    }
+
+    void apply_audio_options() {
+        if (!audio_options_window) {
+            return;
+        }
+
+        AudioSettings new_settings{};
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            new_settings = audio_settings;
+        }
+
+        int selection = combo_selection(audio_volume_combo);
+        if (selection >= 0 && selection < static_cast<int>(audio_volume_choices.size())) {
+            new_settings.volume_percent = audio_volume_choices[selection].value;
+        }
+
+        selection = combo_selection(audio_rate_combo);
+        if (selection >= 0 && selection < static_cast<int>(audio_rate_choices.size())) {
+            new_settings.output_rate = static_cast<uint32_t>(audio_rate_choices[selection].value);
+        }
+
+        selection = combo_selection(audio_buffer_combo);
+        if (selection >= 0 && selection < static_cast<int>(audio_buffer_choices.size())) {
+            new_settings.buffer_samples = static_cast<uint16_t>(audio_buffer_choices[selection].value);
+        }
+
+        new_settings.muted = IsDlgButtonChecked(audio_options_window, static_cast<int>(audio_command_apply + 10)) == BST_CHECKED;
+
+        bool restart_audio = false;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            restart_audio = new_settings.output_rate != audio_settings.output_rate || new_settings.buffer_samples != audio_settings.buffer_samples;
+            audio_settings = new_settings;
+        }
+
+        if (restart_audio && audio_device != 0) {
+            reset_audio(new_settings.output_rate);
+        }
+        save_recut_settings();
+    }
+
+    LRESULT CALLBACK audio_options_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+        switch (message) {
+        case WM_CREATE:
+            EnableThemeDialogTexture(hwnd, ETDT_ENABLETAB);
+            create_label(hwnd, L"Volume", 18, 20, 120);
+            audio_volume_combo = create_combo(hwnd, audio_command_apply + 1, 150, 16, 190);
+            audio_mute_checkbox = create_checkbox(hwnd, L"Mute", audio_command_apply + 10, 150, 52, 120);
+            create_label(hwnd, L"Output rate", 18, 90, 120);
+            audio_rate_combo = create_combo(hwnd, audio_command_apply + 2, 150, 86, 190);
+            create_label(hwnd, L"Buffer size", 18, 126, 120);
+            audio_buffer_combo = create_combo(hwnd, audio_command_apply + 3, 150, 122, 190);
+            create_button(hwnd, L"Apply", audio_command_apply, 156, 172, 88);
+            create_button(hwnd, L"Close", audio_command_close, 254, 172, 88);
+            fill_audio_options_controls();
+            return 0;
+        case WM_CTLCOLORSTATIC: {
+            HDC dc = reinterpret_cast<HDC>(wparam);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+        }
+        case WM_COMMAND:
+            switch (LOWORD(wparam)) {
+            case audio_command_apply:
+                apply_audio_options();
+                return 0;
+            case audio_command_close:
+                ShowWindow(hwnd, SW_HIDE);
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        case WM_DESTROY:
+            audio_options_window = nullptr;
+            audio_volume_combo = nullptr;
+            audio_rate_combo = nullptr;
+            audio_buffer_combo = nullptr;
+            audio_mute_checkbox = nullptr;
+            return 0;
+        }
+
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
+    void show_audio_options_window() {
+        if (!main_window) {
+            return;
+        }
+
+        if (!audio_options_window) {
+            const wchar_t* class_name = L"PaperMarioReCutAudioOptions";
+            static bool registered = false;
+            if (!registered) {
+                WNDCLASSW window_class{};
+                window_class.lpfnWndProc = audio_options_window_proc;
+                window_class.hInstance = GetModuleHandleW(nullptr);
+                window_class.lpszClassName = class_name;
+                window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+                window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+                RegisterClassW(&window_class);
+                registered = true;
+            }
+
+            audio_options_window = CreateWindowExW(
+                WS_EX_DLGMODALFRAME,
+                class_name,
+                L"Audio Options",
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                CW_USEDEFAULT, CW_USEDEFAULT, 370, 250,
+                main_window,
+                nullptr,
+                GetModuleHandleW(nullptr),
+                nullptr);
+            center_dialog_on_main(audio_options_window, 370, 250);
+        }
+        else {
+            fill_audio_options_controls();
+        }
+
+        ShowWindow(audio_options_window, SW_SHOWNORMAL);
+        SetForegroundWindow(audio_options_window);
+    }
+
+    void destroy_audio_options_window() {
+        if (audio_options_window) {
+            DestroyWindow(audio_options_window);
+            audio_options_window = nullptr;
+        }
+    }
+
+    std::wstring gamepad_binding_label(const GamepadBinding& binding) {
+        if (binding.kind == GamepadBindingKind::Button) {
+            const char* name = SDL_GameControllerGetStringForButton(static_cast<SDL_GameControllerButton>(binding.code));
+            std::wstring wide = utf8_to_wide(name);
+            return wide.empty() ? L"Unknown Button" : L"Button " + wide;
+        }
+
+        const char* name = SDL_GameControllerGetStringForAxis(static_cast<SDL_GameControllerAxis>(binding.code));
+        std::wstring wide = utf8_to_wide(name);
+        if (wide.empty()) {
+            wide = L"Unknown Axis";
+        }
+        return wide + (binding.kind == GamepadBindingKind::AxisPositive ? L" +" : L" -");
+    }
+
+    void build_gamepad_binding_choices() {
+        gamepad_binding_choices.clear();
+        const SDL_GameControllerButton buttons[] = {
+            SDL_CONTROLLER_BUTTON_A,
+            SDL_CONTROLLER_BUTTON_B,
+            SDL_CONTROLLER_BUTTON_X,
+            SDL_CONTROLLER_BUTTON_Y,
+            SDL_CONTROLLER_BUTTON_BACK,
+            SDL_CONTROLLER_BUTTON_START,
+            SDL_CONTROLLER_BUTTON_LEFTSTICK,
+            SDL_CONTROLLER_BUTTON_RIGHTSTICK,
+            SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+            SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+            SDL_CONTROLLER_BUTTON_DPAD_UP,
+            SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+            SDL_CONTROLLER_BUTTON_DPAD_LEFT,
+            SDL_CONTROLLER_BUTTON_DPAD_RIGHT
+        };
+        for (SDL_GameControllerButton button : buttons) {
+            gamepad_binding_choices.push_back({ GamepadBindingKind::Button, button });
+        }
+
+        const SDL_GameControllerAxis axes[] = {
+            SDL_CONTROLLER_AXIS_LEFTX,
+            SDL_CONTROLLER_AXIS_LEFTY,
+            SDL_CONTROLLER_AXIS_RIGHTX,
+            SDL_CONTROLLER_AXIS_RIGHTY,
+            SDL_CONTROLLER_AXIS_TRIGGERLEFT,
+            SDL_CONTROLLER_AXIS_TRIGGERRIGHT
+        };
+        for (SDL_GameControllerAxis axis : axes) {
+            gamepad_binding_choices.push_back({ GamepadBindingKind::AxisPositive, axis });
+            gamepad_binding_choices.push_back({ GamepadBindingKind::AxisNegative, axis });
+        }
+    }
+
+    void build_keyboard_binding_choices() {
+        keyboard_binding_choices = {
+            SDL_SCANCODE_A, SDL_SCANCODE_B, SDL_SCANCODE_C, SDL_SCANCODE_D,
+            SDL_SCANCODE_E, SDL_SCANCODE_F, SDL_SCANCODE_G, SDL_SCANCODE_H,
+            SDL_SCANCODE_I, SDL_SCANCODE_J, SDL_SCANCODE_K, SDL_SCANCODE_L,
+            SDL_SCANCODE_M, SDL_SCANCODE_N, SDL_SCANCODE_O, SDL_SCANCODE_P,
+            SDL_SCANCODE_Q, SDL_SCANCODE_R, SDL_SCANCODE_S, SDL_SCANCODE_T,
+            SDL_SCANCODE_U, SDL_SCANCODE_V, SDL_SCANCODE_W, SDL_SCANCODE_X,
+            SDL_SCANCODE_Y, SDL_SCANCODE_Z,
+            SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4,
+            SDL_SCANCODE_5, SDL_SCANCODE_6, SDL_SCANCODE_7, SDL_SCANCODE_8,
+            SDL_SCANCODE_9, SDL_SCANCODE_0,
+            SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT,
+            SDL_SCANCODE_SPACE, SDL_SCANCODE_RETURN, SDL_SCANCODE_TAB,
+            SDL_SCANCODE_LSHIFT, SDL_SCANCODE_RSHIFT,
+            SDL_SCANCODE_LCTRL, SDL_SCANCODE_RCTRL,
+            SDL_SCANCODE_LALT, SDL_SCANCODE_RALT,
+            SDL_SCANCODE_COMMA, SDL_SCANCODE_PERIOD, SDL_SCANCODE_SLASH,
+            SDL_SCANCODE_SEMICOLON, SDL_SCANCODE_APOSTROPHE,
+            SDL_SCANCODE_LEFTBRACKET, SDL_SCANCODE_RIGHTBRACKET,
+            SDL_SCANCODE_MINUS, SDL_SCANCODE_EQUALS
+        };
+    }
+
+    int find_gamepad_binding_index(const GamepadBinding& binding) {
+        for (size_t i = 0; i < gamepad_binding_choices.size(); i++) {
+            if (gamepad_binding_choices[i].kind == binding.kind && gamepad_binding_choices[i].code == binding.code) {
+                return static_cast<int>(i);
+            }
+        }
+        return 0;
+    }
+
+    int find_keyboard_binding_index(SDL_Scancode scancode) {
+        for (size_t i = 0; i < keyboard_binding_choices.size(); i++) {
+            if (keyboard_binding_choices[i] == scancode) {
+                return static_cast<int>(i);
+            }
+        }
+        return 0;
+    }
+
+    std::wstring controller_profile_name(const char* controller_name) {
+        std::string lower = controller_name ? controller_name : "";
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        if (lower.find("playstation") != std::string::npos ||
+            lower.find("dualsense") != std::string::npos ||
+            lower.find("dualshock") != std::string::npos ||
+            lower.find("ps4") != std::string::npos ||
+            lower.find("ps5") != std::string::npos) {
+            return L"Automatic profile: PlayStation";
+        }
+        if (lower.find("xbox") != std::string::npos ||
+            lower.find("xinput") != std::string::npos) {
+            return L"Automatic profile: Xbox";
+        }
+        return L"Automatic profile: SDL Gamepad";
+    }
+
+    void update_input_profile_label() {
+        if (!input_profile_label || !input_controller_combo) {
+            return;
+        }
+
+        const int selection = combo_selection(input_controller_combo);
+        if (selection >= 0 && selection < static_cast<int>(input_controller_choices.size())) {
+            const int device_index = input_controller_choices[selection];
+            const char* name = SDL_GameControllerNameForIndex(device_index);
+            std::wstring label = controller_profile_name(name);
+            SetWindowTextW(input_profile_label, label.c_str());
+        }
+        else {
+            SetWindowTextW(input_profile_label, L"No controller selected");
+        }
+    }
+
+    void sync_input_gamepad_binding_combo() {
+        const int action_index = combo_selection(input_gamepad_action_combo);
+        if (action_index >= 0 && action_index < input_action_count) {
+            combo_select_clamped(input_gamepad_binding_combo, find_gamepad_binding_index(input_window_pending_settings.gamepad_bindings[action_index]));
+        }
+    }
+
+    void sync_input_keyboard_binding_combo() {
+        const int action_index = combo_selection(input_keyboard_action_combo);
+        if (action_index >= 0 && action_index < input_action_count) {
+            combo_select_clamped(input_keyboard_binding_combo, find_keyboard_binding_index(input_window_pending_settings.keyboard_bindings[action_index]));
+        }
+    }
+
+    void fill_input_options_controls() {
+        if (!input_options_window) {
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            input_window_pending_settings = input_settings;
+        }
+        input_window_pending_valid = true;
+
+        build_gamepad_binding_choices();
+        build_keyboard_binding_choices();
+
+        input_controller_choices.clear();
+        SendMessageW(input_controller_combo, CB_RESETCONTENT, 0, 0);
+        const int joystick_count = SDL_NumJoysticks();
+        int preferred_selection = 0;
+        for (int i = 0; i < joystick_count; i++) {
+            if (!SDL_IsGameController(i)) {
+                continue;
+            }
+
+            input_controller_choices.push_back(i);
+            std::wstring label = utf8_to_wide(SDL_GameControllerNameForIndex(i));
+            if (label.empty()) {
+                label = L"Gamepad";
+            }
+            combo_add(input_controller_combo, label.c_str());
+            if (i == input_window_pending_settings.preferred_controller_index) {
+                preferred_selection = static_cast<int>(input_controller_choices.size()) - 1;
+            }
+        }
+        if (input_controller_choices.empty()) {
+            combo_add(input_controller_combo, L"No SDL gamepad found");
+        }
+        combo_select_clamped(input_controller_combo, preferred_selection);
+        update_input_profile_label();
+
+        SendMessageW(input_gamepad_action_combo, CB_RESETCONTENT, 0, 0);
+        SendMessageW(input_keyboard_action_combo, CB_RESETCONTENT, 0, 0);
+        for (const InputActionDescriptor& action : input_actions) {
+            combo_add(input_gamepad_action_combo, action.label);
+            combo_add(input_keyboard_action_combo, action.label);
+        }
+        combo_select_clamped(input_gamepad_action_combo, 0);
+        combo_select_clamped(input_keyboard_action_combo, 0);
+
+        SendMessageW(input_gamepad_binding_combo, CB_RESETCONTENT, 0, 0);
+        for (const GamepadBinding& binding : gamepad_binding_choices) {
+            const std::wstring label = gamepad_binding_label(binding);
+            combo_add(input_gamepad_binding_combo, label.c_str());
+        }
+        sync_input_gamepad_binding_combo();
+
+        SendMessageW(input_keyboard_binding_combo, CB_RESETCONTENT, 0, 0);
+        for (SDL_Scancode scancode : keyboard_binding_choices) {
+            const std::wstring label = utf8_to_wide(SDL_GetScancodeName(scancode));
+            combo_add(input_keyboard_binding_combo, label.empty() ? L"Unknown" : label.c_str());
+        }
+        sync_input_keyboard_binding_combo();
+        CheckDlgButton(input_options_window, static_cast<int>(input_command_apply + 20), input_window_pending_settings.mouse_click_to_move ? BST_CHECKED : BST_UNCHECKED);
+    }
+
+    void show_input_page(int page_index) {
+        ShowWindow(input_gamepad_page, page_index == 0 ? SW_SHOW : SW_HIDE);
+        ShowWindow(input_keyboard_page, page_index == 1 ? SW_SHOW : SW_HIDE);
+    }
+
+    void stage_gamepad_binding() {
+        const int action_index = combo_selection(input_gamepad_action_combo);
+        const int binding_index = combo_selection(input_gamepad_binding_combo);
+        if (action_index >= 0 && action_index < input_action_count &&
+            binding_index >= 0 && binding_index < static_cast<int>(gamepad_binding_choices.size())) {
+            input_window_pending_settings.gamepad_bindings[action_index] = gamepad_binding_choices[binding_index];
+        }
+    }
+
+    void stage_keyboard_binding() {
+        const int action_index = combo_selection(input_keyboard_action_combo);
+        const int binding_index = combo_selection(input_keyboard_binding_combo);
+        if (action_index >= 0 && action_index < input_action_count &&
+            binding_index >= 0 && binding_index < static_cast<int>(keyboard_binding_choices.size())) {
+            input_window_pending_settings.keyboard_bindings[action_index] = keyboard_binding_choices[binding_index];
+        }
+    }
+
+    void apply_automatic_gamepad_profile() {
+        input_window_pending_settings.gamepad_bindings = make_default_input_settings().gamepad_bindings;
+        sync_input_gamepad_binding_combo();
+    }
+
+    void apply_input_options() {
+        if (!input_options_window || !input_window_pending_valid) {
+            return;
+        }
+
+        stage_gamepad_binding();
+        stage_keyboard_binding();
+        input_window_pending_settings.mouse_click_to_move =
+            IsDlgButtonChecked(input_options_window, static_cast<int>(input_command_apply + 20)) == BST_CHECKED;
+
+        const int controller_selection = combo_selection(input_controller_combo);
+        if (controller_selection >= 0 && controller_selection < static_cast<int>(input_controller_choices.size())) {
+            input_window_pending_settings.preferred_controller_index = input_controller_choices[controller_selection];
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            input_settings = input_window_pending_settings;
+        }
+        select_controller_index(input_window_pending_settings.preferred_controller_index);
+        save_recut_settings();
+    }
+
+    LRESULT CALLBACK input_options_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+        switch (message) {
+        case WM_CREATE: {
+            EnableThemeDialogTexture(hwnd, ETDT_ENABLETAB);
+            input_tab_control = CreateWindowExW(
+                0, WC_TABCONTROLW, nullptr,
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP,
+                12, 12, 500, 292,
+                hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+            use_ui_font(input_tab_control);
+
+            TCITEMW gamepad_tab{};
+            gamepad_tab.mask = TCIF_TEXT;
+            gamepad_tab.pszText = const_cast<wchar_t*>(L"Gamepad");
+            TabCtrl_InsertItem(input_tab_control, 0, &gamepad_tab);
+            TCITEMW keyboard_tab{};
+            keyboard_tab.mask = TCIF_TEXT;
+            keyboard_tab.pszText = const_cast<wchar_t*>(L"Keyboard / Mouse");
+            TabCtrl_InsertItem(input_tab_control, 1, &keyboard_tab);
+
+            input_gamepad_page = CreateWindowExW(0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE, 24, 44, 476, 248, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+            input_keyboard_page = CreateWindowExW(0, L"STATIC", nullptr, WS_CHILD, 24, 44, 476, 248, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+            create_label(input_gamepad_page, L"Controller", 0, 4, 110);
+            input_controller_combo = create_combo(input_gamepad_page, input_command_apply + 1, 128, 0, 310);
+            input_profile_label = create_label(input_gamepad_page, L"Automatic profile: SDL Gamepad", 128, 36, 310);
+            create_button(input_gamepad_page, L"Apply Automatic Profile", input_command_apply_profile, 128, 64, 180);
+            create_label(input_gamepad_page, L"Action", 0, 118, 110);
+            input_gamepad_action_combo = create_combo(input_gamepad_page, input_command_apply + 2, 128, 114, 170);
+            create_label(input_gamepad_page, L"Binding", 0, 154, 110);
+            input_gamepad_binding_combo = create_combo(input_gamepad_page, input_command_apply + 3, 128, 150, 170);
+            create_button(input_gamepad_page, L"Set Binding", input_command_stage_gamepad_binding, 312, 148, 126);
+
+            create_label(input_keyboard_page, L"Action", 0, 14, 110);
+            input_keyboard_action_combo = create_combo(input_keyboard_page, input_command_apply + 4, 128, 10, 170);
+            create_label(input_keyboard_page, L"Key", 0, 50, 110);
+            input_keyboard_binding_combo = create_combo(input_keyboard_page, input_command_apply + 5, 128, 46, 170);
+            create_button(input_keyboard_page, L"Set Binding", input_command_stage_keyboard_binding, 312, 44, 126);
+            input_mouse_checkbox = create_checkbox(input_keyboard_page, L"Mouse Click-To-Move", input_command_apply + 20, 128, 92, 220);
+
+            create_button(hwnd, L"Apply", input_command_apply, 326, 318, 88);
+            create_button(hwnd, L"Close", input_command_close, 424, 318, 88);
+            fill_input_options_controls();
+            show_input_page(0);
+            return 0;
+        }
+        case WM_CTLCOLORSTATIC: {
+            HDC dc = reinterpret_cast<HDC>(wparam);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+        }
+        case WM_NOTIFY:
+            if (reinterpret_cast<NMHDR*>(lparam)->hwndFrom == input_tab_control &&
+                reinterpret_cast<NMHDR*>(lparam)->code == TCN_SELCHANGE) {
+                show_input_page(TabCtrl_GetCurSel(input_tab_control));
+                return 0;
+            }
+            break;
+        case WM_COMMAND:
+            switch (LOWORD(wparam)) {
+            case input_command_apply:
+                apply_input_options();
+                return 0;
+            case input_command_close:
+                ShowWindow(hwnd, SW_HIDE);
+                return 0;
+            case input_command_apply_profile:
+                apply_automatic_gamepad_profile();
+                return 0;
+            case input_command_stage_gamepad_binding:
+                stage_gamepad_binding();
+                return 0;
+            case input_command_stage_keyboard_binding:
+                stage_keyboard_binding();
+                return 0;
+            default:
+                if (reinterpret_cast<HWND>(lparam) == input_controller_combo && HIWORD(wparam) == CBN_SELCHANGE) {
+                    update_input_profile_label();
+                    return 0;
+                }
+                if (reinterpret_cast<HWND>(lparam) == input_gamepad_action_combo && HIWORD(wparam) == CBN_SELCHANGE) {
+                    sync_input_gamepad_binding_combo();
+                    return 0;
+                }
+                if (reinterpret_cast<HWND>(lparam) == input_keyboard_action_combo && HIWORD(wparam) == CBN_SELCHANGE) {
+                    sync_input_keyboard_binding_combo();
+                    return 0;
+                }
+                break;
+            }
+            break;
+        case WM_CLOSE:
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        case WM_DESTROY:
+            input_options_window = nullptr;
+            input_tab_control = nullptr;
+            input_gamepad_page = nullptr;
+            input_keyboard_page = nullptr;
+            input_controller_combo = nullptr;
+            input_profile_label = nullptr;
+            input_gamepad_action_combo = nullptr;
+            input_gamepad_binding_combo = nullptr;
+            input_keyboard_action_combo = nullptr;
+            input_keyboard_binding_combo = nullptr;
+            input_mouse_checkbox = nullptr;
+            input_window_pending_valid = false;
+            return 0;
+        }
+
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
+    void show_input_options_window() {
+        if (!main_window) {
+            return;
+        }
+
+        if (!input_options_window) {
+            const wchar_t* class_name = L"PaperMarioReCutInputOptions";
+            static bool registered = false;
+            if (!registered) {
+                WNDCLASSW window_class{};
+                window_class.lpfnWndProc = input_options_window_proc;
+                window_class.hInstance = GetModuleHandleW(nullptr);
+                window_class.lpszClassName = class_name;
+                window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+                window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+                RegisterClassW(&window_class);
+                registered = true;
+            }
+
+            input_options_window = CreateWindowExW(
+                WS_EX_DLGMODALFRAME,
+                class_name,
+                L"Input Options",
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                CW_USEDEFAULT, CW_USEDEFAULT, 540, 400,
+                main_window,
+                nullptr,
+                GetModuleHandleW(nullptr),
+                nullptr);
+            center_dialog_on_main(input_options_window, 540, 400);
+        }
+        else {
+            fill_input_options_controls();
+        }
+
+        ShowWindow(input_options_window, SW_SHOWNORMAL);
+        SetForegroundWindow(input_options_window);
+    }
+
+    void destroy_input_options_window() {
+        if (input_options_window) {
+            DestroyWindow(input_options_window);
+            input_options_window = nullptr;
         }
     }
 
@@ -982,19 +2293,56 @@ namespace {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Paper Mario ReCut", msg, window);
     }
 
+    bool open_controller_index(int device_index) {
+        if (device_index < 0 || device_index >= SDL_NumJoysticks() || !SDL_IsGameController(device_index)) {
+            return false;
+        }
+
+        SDL_GameController* opened_controller = SDL_GameControllerOpen(device_index);
+        if (opened_controller == nullptr) {
+            return false;
+        }
+
+        if (controller != nullptr) {
+            SDL_GameControllerClose(controller);
+        }
+        controller = opened_controller;
+        active_controller_device_index = device_index;
+        return true;
+    }
+
     void open_first_controller() {
         if (controller != nullptr) {
             return;
         }
 
         const int count = SDL_NumJoysticks();
+        int preferred_controller_index = 0;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            preferred_controller_index = input_settings.preferred_controller_index;
+        }
+
+        if (open_controller_index(preferred_controller_index)) {
+            return;
+        }
+
         for (int i = 0; i < count; i++) {
-            if (SDL_IsGameController(i)) {
-                controller = SDL_GameControllerOpen(i);
-                if (controller != nullptr) {
-                    break;
-                }
+            if (i != preferred_controller_index && open_controller_index(i)) {
+                return;
             }
+        }
+    }
+
+    void select_controller_index(int device_index) {
+        if (controller != nullptr) {
+            SDL_GameControllerClose(controller);
+            controller = nullptr;
+            active_controller_device_index = -1;
+        }
+
+        if (!open_controller_index(device_index)) {
+            open_first_controller();
         }
     }
 
@@ -1011,7 +2359,7 @@ namespace {
 #ifdef _WIN32
         INITCOMMONCONTROLSEX controls{};
         controls.dwSize = sizeof(controls);
-        controls.dwICC = ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS;
+        controls.dwICC = ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS | ICC_TAB_CLASSES;
         InitCommonControlsEx(&controls);
         SetThemeAppProperties(STAP_ALLOW_NONCLIENT | STAP_ALLOW_CONTROLS | STAP_ALLOW_WEBCONTENT);
         SDL_EventState(SDL_SYSWMEVENT, SDL_ENABLE);
@@ -1066,6 +2414,7 @@ namespace {
                 if (controller != nullptr && event.cdevice.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller))) {
                     SDL_GameControllerClose(controller);
                     controller = nullptr;
+                    active_controller_device_index = -1;
                     open_first_controller();
                 }
             }
@@ -1130,11 +2479,17 @@ namespace {
             audio_device = 0;
         }
 
+        uint16_t buffer_samples = 256;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            buffer_samples = audio_settings.buffer_samples;
+        }
+
         SDL_AudioSpec desired{};
         desired.freq = static_cast<int>(output_freq);
         desired.format = AUDIO_F32;
         desired.channels = static_cast<Uint8>(output_channels);
-        desired.samples = 0x100;
+        desired.samples = buffer_samples;
         desired.callback = nullptr;
 
         audio_device = SDL_OpenAudioDevice(nullptr, 0, &desired, nullptr, 0);
@@ -1152,7 +2507,12 @@ namespace {
         sample_rate = freq == 0 ? 48000 : freq;
 
         if (audio_device == 0) {
-            reset_audio(48000);
+            uint32_t configured_output_rate = 48000;
+            {
+                std::lock_guard<std::mutex> lock(settings_mutex);
+                configured_output_rate = audio_settings.output_rate;
+            }
+            reset_audio(configured_output_rate);
             return;
         }
 
@@ -1177,7 +2537,15 @@ namespace {
             swap_buffer[i] = duplicated_sample_buffer[i];
         }
 
-        constexpr float output_gain = 0.5f / 32768.0f;
+        int volume_percent = 50;
+        bool muted = false;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            volume_percent = audio_settings.volume_percent;
+            muted = audio_settings.muted;
+        }
+
+        const float output_gain = (muted ? 0.0f : std::clamp(volume_percent, 0, 200) / 100.0f) / 32768.0f;
         for (size_t i = 0; i + 1 < sample_count; i += input_channels) {
             swap_buffer[i + 0 + duplicated_input_frames * input_channels] = audio_data[i + 1] * output_gain;
             swap_buffer[i + 1 + duplicated_input_frames * input_channels] = audio_data[i + 0] * output_gain;
@@ -1245,6 +2613,42 @@ namespace {
         return std::clamp(static_cast<float>(value) / 32767.0f, -1.0f, 1.0f);
     }
 
+    float gamepad_binding_strength(const GamepadBinding& binding) {
+        if (controller == nullptr) {
+            return 0.0f;
+        }
+
+        if (binding.kind == GamepadBindingKind::Button) {
+            if (binding.code < 0 || binding.code >= SDL_CONTROLLER_BUTTON_MAX) {
+                return 0.0f;
+            }
+            return SDL_GameControllerGetButton(controller, static_cast<SDL_GameControllerButton>(binding.code)) ? 1.0f : 0.0f;
+        }
+
+        if (binding.code < 0 || binding.code >= SDL_CONTROLLER_AXIS_MAX) {
+            return 0.0f;
+        }
+
+        const float axis_value = normalize_axis(SDL_GameControllerGetAxis(controller, static_cast<SDL_GameControllerAxis>(binding.code)));
+        if (binding.kind == GamepadBindingKind::AxisPositive) {
+            return std::max(axis_value, 0.0f);
+        }
+        return std::max(-axis_value, 0.0f);
+    }
+
+    void apply_input_action(int action_index, float strength, uint16_t& out_buttons, float& out_x, float& out_y) {
+        if (action_index < 0 || action_index >= input_action_count || strength <= 0.0f) {
+            return;
+        }
+
+        const InputActionDescriptor& action = input_actions[action_index];
+        if (action.button != 0 && strength >= 0.5f) {
+            out_buttons |= action.button;
+        }
+        out_x += action.axis_x * strength;
+        out_y += action.axis_y * strength;
+    }
+
     bool get_input(int controller_num, uint16_t* buttons, float* x, float* y) {
         if (controller_num != 0) {
             return false;
@@ -1261,52 +2665,45 @@ namespace {
         float out_x = 0.0f;
         float out_y = 0.0f;
 
+        AppInputSettings input_snapshot{};
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            input_snapshot = input_settings;
+        }
+
         const Uint8* keys = SDL_GetKeyboardState(nullptr);
-        if (keys[SDL_SCANCODE_Z]) out_buttons |= A_BUTTON;
-        if (keys[SDL_SCANCODE_X]) out_buttons |= B_BUTTON;
-        if (keys[SDL_SCANCODE_RETURN]) out_buttons |= START_BUTTON;
-        if (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]) out_buttons |= Z_BUTTON;
-        if (keys[SDL_SCANCODE_Q]) out_buttons |= L_TRIG;
-        if (keys[SDL_SCANCODE_E]) out_buttons |= R_TRIG;
-        if (keys[SDL_SCANCODE_I]) out_buttons |= U_CBUTTONS;
-        if (keys[SDL_SCANCODE_K]) out_buttons |= D_CBUTTONS;
-        if (keys[SDL_SCANCODE_J]) out_buttons |= L_CBUTTONS;
-        if (keys[SDL_SCANCODE_L]) out_buttons |= R_CBUTTONS;
-        if (keys[SDL_SCANCODE_W]) out_buttons |= U_JPAD;
-        if (keys[SDL_SCANCODE_S]) out_buttons |= D_JPAD;
-        if (keys[SDL_SCANCODE_A]) out_buttons |= L_JPAD;
-        if (keys[SDL_SCANCODE_D]) out_buttons |= R_JPAD;
-
-        if (keys[SDL_SCANCODE_LEFT]) out_x -= 1.0f;
-        if (keys[SDL_SCANCODE_RIGHT]) out_x += 1.0f;
-        if (keys[SDL_SCANCODE_DOWN]) out_y -= 1.0f;
-        if (keys[SDL_SCANCODE_UP]) out_y += 1.0f;
-
-        if (controller != nullptr) {
-            if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_A)) out_buttons |= A_BUTTON;
-            if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_X)) out_buttons |= B_BUTTON;
-            if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_START)) out_buttons |= START_BUTTON;
-            if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) out_buttons |= L_TRIG;
-            if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) out_buttons |= R_TRIG;
-            if (SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000) out_buttons |= Z_BUTTON;
-            if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_UP)) out_buttons |= U_JPAD;
-            if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) out_buttons |= D_JPAD;
-            if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT)) out_buttons |= L_JPAD;
-            if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) out_buttons |= R_JPAD;
-
-            float pad_x = normalize_axis(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX));
-            float pad_y = -normalize_axis(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY));
-            if (pad_x != 0.0f || pad_y != 0.0f) {
-                out_x = pad_x;
-                out_y = pad_y;
+        for (int i = 0; i < input_action_count; i++) {
+            const SDL_Scancode scancode = input_snapshot.keyboard_bindings[i];
+            if (scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_NUM_SCANCODES && keys[scancode]) {
+                apply_input_action(i, 1.0f, out_buttons, out_x, out_y);
             }
 
-            float right_x = normalize_axis(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTX));
-            float right_y = -normalize_axis(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY));
-            if (right_y > 0.5f) out_buttons |= U_CBUTTONS;
-            if (right_y < -0.5f) out_buttons |= D_CBUTTONS;
-            if (right_x < -0.5f) out_buttons |= L_CBUTTONS;
-            if (right_x > 0.5f) out_buttons |= R_CBUTTONS;
+            apply_input_action(i, gamepad_binding_strength(input_snapshot.gamepad_bindings[i]), out_buttons, out_x, out_y);
+        }
+
+        if (input_snapshot.mouse_click_to_move && window != nullptr) {
+            bool mouse_controls_active = true;
+#ifdef _WIN32
+            mouse_controls_active = GetForegroundWindow() == main_window;
+#endif
+            if (mouse_controls_active) {
+                int mouse_x = 0;
+                int mouse_y = 0;
+                const Uint32 mouse_state = SDL_GetMouseState(&mouse_x, &mouse_y);
+                int window_width = 1;
+                int window_height = 1;
+                SDL_GetWindowSize(window, &window_width, &window_height);
+                if ((mouse_state & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0) {
+                    out_x = std::clamp((mouse_x - window_width * 0.5f) / std::max(window_width * 0.5f, 1.0f), -1.0f, 1.0f);
+                    out_y = std::clamp((window_height * 0.5f - mouse_y) / std::max(window_height * 0.5f, 1.0f), -1.0f, 1.0f);
+                }
+                if ((mouse_state & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0) {
+                    out_buttons |= A_BUTTON;
+                }
+                if ((mouse_state & SDL_BUTTON(SDL_BUTTON_MIDDLE)) != 0) {
+                    out_buttons |= B_BUTTON;
+                }
+            }
         }
 
         *buttons = out_buttons;
@@ -1441,6 +2838,163 @@ namespace {
             "    \"extraFiles\": []\n"
             "}\n";
         return true;
+    }
+
+    std::filesystem::path app_settings_path() {
+        return app_config_path() / "recut_settings.json";
+    }
+
+    int input_action_index(InputAction action) {
+        return static_cast<int>(action);
+    }
+
+    void to_json(nlohmann::json& json, const GamepadBinding& binding) {
+        json = nlohmann::json{
+            { "kind", binding.kind == GamepadBindingKind::Button ? "Button" : (binding.kind == GamepadBindingKind::AxisPositive ? "AxisPositive" : "AxisNegative") },
+            { "code", binding.code }
+        };
+    }
+
+    GamepadBinding gamepad_binding_from_json(const nlohmann::json& json, const GamepadBinding& fallback) {
+        if (!json.is_object()) {
+            return fallback;
+        }
+
+        GamepadBinding binding = fallback;
+        const std::string kind = json.value("kind", std::string{});
+        if (kind == "Button") {
+            binding.kind = GamepadBindingKind::Button;
+        }
+        else if (kind == "AxisPositive") {
+            binding.kind = GamepadBindingKind::AxisPositive;
+        }
+        else if (kind == "AxisNegative") {
+            binding.kind = GamepadBindingKind::AxisNegative;
+        }
+        binding.code = json.value("code", binding.code);
+        return binding;
+    }
+
+    void load_recut_settings() {
+        std::ifstream settings_file(app_settings_path(), std::ios::binary);
+        if (!settings_file.good()) {
+            return;
+        }
+
+        try {
+            nlohmann::json settings_json{};
+            settings_file >> settings_json;
+
+            auto graphics_config = ultramodern::renderer::get_graphics_config();
+            if (settings_json.contains("graphics") && settings_json["graphics"].is_object()) {
+                const nlohmann::json& graphics = settings_json["graphics"];
+                graphics_config.res_option = graphics.value("resolution", graphics_config.res_option);
+                graphics_config.resolution_multiplier = graphics.value("resolutionMultiplier", graphics_config.resolution_multiplier);
+                graphics_config.wm_option = graphics.value("windowMode", graphics_config.wm_option);
+                graphics_config.ar_option = graphics.value("aspectRatio", graphics_config.ar_option);
+                graphics_config.msaa_option = graphics.value("antialiasing", graphics_config.msaa_option);
+                graphics_config.hpfb_option = graphics.value("framebuffer", graphics_config.hpfb_option);
+                graphics_config.filtering_option = graphics.value("textureFiltering", graphics_config.filtering_option);
+                graphics_config.upscale_2d = graphics.value("upscale2D", graphics_config.upscale_2d);
+                graphics_config.hardware_resolve = graphics.value("hardwareResolve", graphics_config.hardware_resolve);
+                graphics_config.three_point_filtering = graphics.value("threePointFiltering", graphics_config.three_point_filtering);
+                graphics_config.rr_option = graphics.value("refreshRate", graphics_config.rr_option);
+                graphics_config.rr_manual_value = graphics.value("refreshRateTarget", graphics_config.rr_manual_value);
+                graphics_config.ds_option = graphics.value("downsampleMultiplier", graphics_config.ds_option);
+                graphics_config.anisotropic_filtering = graphics.value("anisotropicFiltering", graphics_config.anisotropic_filtering);
+                ultramodern::renderer::set_graphics_config(graphics_config);
+            }
+
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            if (settings_json.contains("audio") && settings_json["audio"].is_object()) {
+                const nlohmann::json& audio = settings_json["audio"];
+                audio_settings.volume_percent = std::clamp(audio.value("volumePercent", audio_settings.volume_percent), 0, 200);
+                audio_settings.muted = audio.value("muted", audio_settings.muted);
+                audio_settings.output_rate = audio.value("outputRate", audio_settings.output_rate);
+                audio_settings.buffer_samples = static_cast<uint16_t>(std::clamp(audio.value("bufferSamples", static_cast<int>(audio_settings.buffer_samples)), 128, 2048));
+            }
+
+            if (settings_json.contains("input") && settings_json["input"].is_object()) {
+                const nlohmann::json& input = settings_json["input"];
+                input_settings.preferred_controller_index = input.value("preferredControllerIndex", input_settings.preferred_controller_index);
+                input_settings.mouse_click_to_move = input.value("mouseClickToMove", input_settings.mouse_click_to_move);
+
+                if (input.contains("keyboard") && input["keyboard"].is_array()) {
+                    const nlohmann::json& keyboard = input["keyboard"];
+                    for (size_t i = 0; i < input_settings.keyboard_bindings.size() && i < keyboard.size(); i++) {
+                        input_settings.keyboard_bindings[i] = static_cast<SDL_Scancode>(keyboard[i].get<int>());
+                    }
+                }
+
+                if (input.contains("gamepad") && input["gamepad"].is_array()) {
+                    const nlohmann::json& gamepad = input["gamepad"];
+                    for (size_t i = 0; i < input_settings.gamepad_bindings.size() && i < gamepad.size(); i++) {
+                        input_settings.gamepad_bindings[i] = gamepad_binding_from_json(gamepad[i], input_settings.gamepad_bindings[i]);
+                    }
+                }
+            }
+        }
+        catch (const std::exception& e) {
+            std::fprintf(stderr, "Could not load ReCut settings: %s\n", e.what());
+        }
+    }
+
+    void save_recut_settings() {
+        AudioSettings audio_snapshot{};
+        AppInputSettings input_snapshot{};
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            audio_snapshot = audio_settings;
+            input_snapshot = input_settings;
+        }
+
+        auto graphics_config = ultramodern::renderer::get_graphics_config();
+        nlohmann::json settings_json{};
+        settings_json["graphics"] = {
+            { "resolution", graphics_config.res_option },
+            { "resolutionMultiplier", graphics_config.resolution_multiplier },
+            { "windowMode", graphics_config.wm_option },
+            { "aspectRatio", graphics_config.ar_option },
+            { "antialiasing", graphics_config.msaa_option },
+            { "framebuffer", graphics_config.hpfb_option },
+            { "textureFiltering", graphics_config.filtering_option },
+            { "upscale2D", graphics_config.upscale_2d },
+            { "hardwareResolve", graphics_config.hardware_resolve },
+            { "threePointFiltering", graphics_config.three_point_filtering },
+            { "refreshRate", graphics_config.rr_option },
+            { "refreshRateTarget", graphics_config.rr_manual_value },
+            { "downsampleMultiplier", graphics_config.ds_option },
+            { "anisotropicFiltering", graphics_config.anisotropic_filtering }
+        };
+        settings_json["audio"] = {
+            { "volumePercent", audio_snapshot.volume_percent },
+            { "muted", audio_snapshot.muted },
+            { "outputRate", audio_snapshot.output_rate },
+            { "bufferSamples", audio_snapshot.buffer_samples }
+        };
+        settings_json["input"]["preferredControllerIndex"] = input_snapshot.preferred_controller_index;
+        settings_json["input"]["mouseClickToMove"] = input_snapshot.mouse_click_to_move;
+        settings_json["input"]["keyboard"] = nlohmann::json::array();
+        settings_json["input"]["gamepad"] = nlohmann::json::array();
+        for (SDL_Scancode binding : input_snapshot.keyboard_bindings) {
+            settings_json["input"]["keyboard"].push_back(static_cast<int>(binding));
+        }
+        for (const GamepadBinding& binding : input_snapshot.gamepad_bindings) {
+            nlohmann::json binding_json{};
+            to_json(binding_json, binding);
+            settings_json["input"]["gamepad"].push_back(binding_json);
+        }
+
+        std::error_code error;
+        std::filesystem::create_directories(app_config_path(), error);
+        if (error) {
+            return;
+        }
+
+        std::ofstream settings_file(app_settings_path(), std::ios::binary | std::ios::trunc);
+        if (settings_file.good()) {
+            settings_file << settings_json.dump(4);
+        }
     }
 
     std::filesystem::path installed_rom_path() {
@@ -1614,6 +3168,7 @@ int main(int argc, char** argv) {
     };
 
     recomp::register_config_path(app_config_path());
+    load_recut_settings();
     recomp::register_game(paper_mario_us);
     paper_mario::register_overlays();
 
@@ -1697,6 +3252,9 @@ int main(int argc, char** argv) {
         audio_device = 0;
     }
 #ifdef _WIN32
+    destroy_input_options_window();
+    destroy_audio_options_window();
+    destroy_graphics_options_window();
     destroy_texture_replacement_window();
     destroy_menu_hint_overlay();
     destroy_fps_overlay();

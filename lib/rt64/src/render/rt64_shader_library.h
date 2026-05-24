@@ -18,6 +18,7 @@ namespace RT64 {
         SamplerLibrary samplerLibrary;
         bool usesHDR = false;
         bool usesHardwareResolve = false;
+        uint32_t maxAnisotropy = 16;
 
         // All shaders.
         ShaderRecord bicubicScaling;

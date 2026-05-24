@@ -198,7 +198,8 @@ namespace RT64 {
         
         auto fillSamplerSet = [&](SamplerSet &set, RenderFilter filter, bool anisotropyEnabled) {
             RenderSamplerDesc samplerDesc;
-            samplerDesc.anisotropyEnabled = anisotropyEnabled;
+            samplerDesc.maxAnisotropy = std::max<uint32_t>(maxAnisotropy, 1);
+            samplerDesc.anisotropyEnabled = anisotropyEnabled && (samplerDesc.maxAnisotropy > 1);
             samplerDesc.minFilter = filter;
             samplerDesc.magFilter = filter;
             samplerDesc.addressW = RenderTextureAddressMode::CLAMP;

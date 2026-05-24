@@ -158,6 +158,7 @@ namespace RT64 {
         void updateScreen();
         void destroyShaderCache();
         void updateMultisampling();
+        void updateSamplerAnisotropy(uint32_t maxAnisotropy);
         void end();
         bool loadConfiguration();
         bool saveConfiguration();

@@ -12,6 +12,7 @@ namespace ultramodern {
             Original,
             Original2x,
             Auto,
+            Manual,
             OptionCount
         };
         enum class WindowMode {
@@ -57,20 +58,50 @@ namespace ultramodern {
             Off,
             OptionCount
         };
+        enum class TextureFiltering {
+            Nearest,
+            Linear,
+            PixelScaling,
+            OptionCount
+        };
+        enum class DisplayBuffering {
+            Double,
+            Triple,
+            OptionCount
+        };
+        enum class Upscale2D {
+            Original,
+            ScaledOnly,
+            All,
+            OptionCount
+        };
+        enum class HardwareResolve {
+            Auto,
+            On,
+            Off,
+            OptionCount
+        };
 
         class GraphicsConfig {
         public:
-            bool developer_mode;
-            Resolution res_option;
-            WindowMode wm_option;
-            HUDRatioMode hr_option;
-            GraphicsApi api_option;
-            AspectRatio ar_option;
-            Antialiasing msaa_option;
-            RefreshRate rr_option;
-            HighPrecisionFramebuffer hpfb_option;
-            int rr_manual_value;
-            int ds_option;
+            bool developer_mode = false;
+            Resolution res_option = Resolution::Auto;
+            WindowMode wm_option = WindowMode::Windowed;
+            HUDRatioMode hr_option = HUDRatioMode::Original;
+            GraphicsApi api_option = GraphicsApi::Auto;
+            AspectRatio ar_option = AspectRatio::Original;
+            Antialiasing msaa_option = Antialiasing::None;
+            RefreshRate rr_option = RefreshRate::Original;
+            HighPrecisionFramebuffer hpfb_option = HighPrecisionFramebuffer::Auto;
+            TextureFiltering filtering_option = TextureFiltering::PixelScaling;
+            DisplayBuffering display_buffering = DisplayBuffering::Triple;
+            Upscale2D upscale_2d = Upscale2D::ScaledOnly;
+            HardwareResolve hardware_resolve = HardwareResolve::Auto;
+            bool three_point_filtering = true;
+            int rr_manual_value = 60;
+            int ds_option = 1;
+            int anisotropic_filtering = 16;
+            double resolution_multiplier = 2.0;
 
             virtual ~GraphicsConfig() = default;
 
@@ -84,6 +115,7 @@ namespace ultramodern {
             {ultramodern::renderer::Resolution::Original, "Original"},
             {ultramodern::renderer::Resolution::Original2x, "Original2x"},
             {ultramodern::renderer::Resolution::Auto, "Auto"},
+            {ultramodern::renderer::Resolution::Manual, "Manual"},
         });
 
         NLOHMANN_JSON_SERIALIZE_ENUM(ultramodern::renderer::WindowMode, {
@@ -127,6 +159,29 @@ namespace ultramodern {
             {ultramodern::renderer::HighPrecisionFramebuffer::Auto, "Auto"},
             {ultramodern::renderer::HighPrecisionFramebuffer::On, "On"},
             {ultramodern::renderer::HighPrecisionFramebuffer::Off, "Off"},
+        });
+
+        NLOHMANN_JSON_SERIALIZE_ENUM(ultramodern::renderer::TextureFiltering, {
+            {ultramodern::renderer::TextureFiltering::Nearest, "Nearest"},
+            {ultramodern::renderer::TextureFiltering::Linear, "Linear"},
+            {ultramodern::renderer::TextureFiltering::PixelScaling, "PixelScaling"},
+        });
+
+        NLOHMANN_JSON_SERIALIZE_ENUM(ultramodern::renderer::DisplayBuffering, {
+            {ultramodern::renderer::DisplayBuffering::Double, "Double"},
+            {ultramodern::renderer::DisplayBuffering::Triple, "Triple"},
+        });
+
+        NLOHMANN_JSON_SERIALIZE_ENUM(ultramodern::renderer::Upscale2D, {
+            {ultramodern::renderer::Upscale2D::Original, "Original"},
+            {ultramodern::renderer::Upscale2D::ScaledOnly, "ScaledOnly"},
+            {ultramodern::renderer::Upscale2D::All, "All"},
+        });
+
+        NLOHMANN_JSON_SERIALIZE_ENUM(ultramodern::renderer::HardwareResolve, {
+            {ultramodern::renderer::HardwareResolve::Auto, "Auto"},
+            {ultramodern::renderer::HardwareResolve::On, "On"},
+            {ultramodern::renderer::HardwareResolve::Off, "Off"},
         });
     }
 }
