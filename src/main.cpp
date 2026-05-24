@@ -28,7 +28,6 @@
 #include <DbgHelp.h>
 #include <CommCtrl.h>
 #include <commdlg.h>
-#include <timeapi.h>
 #include <uxtheme.h>
 #endif
 
@@ -2883,6 +2882,7 @@ namespace {
             auto graphics_config = ultramodern::renderer::get_graphics_config();
             if (settings_json.contains("graphics") && settings_json["graphics"].is_object()) {
                 const nlohmann::json& graphics = settings_json["graphics"];
+                graphics_config.api_option = graphics.value("graphicsApi", graphics_config.api_option);
                 graphics_config.res_option = graphics.value("resolution", graphics_config.res_option);
                 graphics_config.resolution_multiplier = graphics.value("resolutionMultiplier", graphics_config.resolution_multiplier);
                 graphics_config.wm_option = graphics.value("windowMode", graphics_config.wm_option);
@@ -2946,6 +2946,7 @@ namespace {
         auto graphics_config = ultramodern::renderer::get_graphics_config();
         nlohmann::json settings_json{};
         settings_json["graphics"] = {
+            { "graphicsApi", graphics_config.api_option },
             { "resolution", graphics_config.res_option },
             { "resolutionMultiplier", graphics_config.resolution_multiplier },
             { "windowMode", graphics_config.wm_option },
@@ -3139,7 +3140,6 @@ namespace {
 int main(int argc, char** argv) {
 #ifdef _WIN32
     SetUnhandledExceptionFilter(crash_handler);
-    timeBeginPeriod(1);
     SDL_setenv("SDL_AUDIODRIVER", "wasapi", true);
 #endif
 
@@ -3257,8 +3257,5 @@ int main(int argc, char** argv) {
 #endif
     SDL_Quit();
 
-#ifdef _WIN32
-    timeEndPeriod(1);
-#endif
     return EXIT_SUCCESS;
 }

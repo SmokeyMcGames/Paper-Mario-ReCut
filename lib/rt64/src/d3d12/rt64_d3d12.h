@@ -109,7 +109,7 @@ namespace RT64 {
         uint32_t width = 0;
         uint32_t height = 0;
         uint32_t refreshRate = 0;
-        bool vsyncEnabled = true;
+        bool vsyncEnabled = false;
 
         D3D12SwapChain(D3D12CommandQueue *commandQueue, RenderWindow renderWindow, uint32_t textureCount, RenderFormat format);
         ~D3D12SwapChain() override;

@@ -9,6 +9,10 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include "Windows.h"
+
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
 #endif
 
 // Start time for the program
@@ -208,16 +212,64 @@ extern "C" int osStopTimer(RDRAM_ARG PTR(OSTimer) t_) {
 
 // The implementations of std::chrono::sleep_until and sleep_for were affected by changing the system clock backwards in older versions
 // of Microsoft's STL. This was fixed as of Visual Studio 2022 17.9, but to be safe ultramodern uses Win32 Sleep directly.
+namespace {
+    HANDLE get_sleep_timer() {
+        thread_local HANDLE timer = []() {
+            HANDLE high_resolution_timer = CreateWaitableTimerExW(
+                nullptr,
+                nullptr,
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_MODIFY_STATE | SYNCHRONIZE);
+            if (high_resolution_timer != nullptr) {
+                return high_resolution_timer;
+            }
+
+            return CreateWaitableTimerExW(
+                nullptr,
+                nullptr,
+                0,
+                TIMER_MODIFY_STATE | SYNCHRONIZE);
+        }();
+
+        return timer;
+    }
+
+    void wait_duration(std::chrono::high_resolution_clock::duration duration) {
+        if (duration <= std::chrono::high_resolution_clock::duration::zero()) {
+            return;
+        }
+
+        HANDLE timer = get_sleep_timer();
+        if (timer == nullptr) {
+            const long long delta_ms = std::chrono::ceil<std::chrono::milliseconds>(duration).count();
+            Sleep(static_cast<DWORD>(std::max<long long>(delta_ms, 1)));
+            return;
+        }
+
+        const long long ticks_100ns = std::max<long long>(
+            1,
+            std::chrono::ceil<std::chrono::duration<long long, std::ratio<1, 10'000'000>>>(duration).count());
+        LARGE_INTEGER due_time{};
+        due_time.QuadPart = -ticks_100ns;
+
+        if (SetWaitableTimerEx(timer, &due_time, 0, nullptr, nullptr, nullptr, 0)) {
+            WaitForSingleObject(timer, INFINITE);
+        }
+        else {
+            const long long delta_ms = std::chrono::ceil<std::chrono::milliseconds>(duration).count();
+            Sleep(static_cast<DWORD>(std::max<long long>(delta_ms, 1)));
+        }
+    }
+}
+
 void ultramodern::sleep_milliseconds(uint32_t millis) {
-    Sleep(millis);
+    wait_duration(std::chrono::milliseconds{millis});
 }
 
 void ultramodern::sleep_until(const std::chrono::high_resolution_clock::time_point& time_point) {
     auto time_now = std::chrono::high_resolution_clock::now();
     if (time_point > time_now) {
-        long long delta_ms = std::chrono::ceil<std::chrono::milliseconds>(time_point - time_now).count();
-        // printf("Sleeping %lld %d ms\n", delta_ms, (uint32_t)delta_ms);
-        Sleep(delta_ms);
+        wait_duration(time_point - time_now);
     }
 }
 

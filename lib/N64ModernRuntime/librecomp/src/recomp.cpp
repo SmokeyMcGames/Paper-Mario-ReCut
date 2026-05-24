@@ -820,7 +820,10 @@ void recomp::start(
     }, window_handle, rdram};
 
     while (!exited) {
-        ultramodern::sleep_milliseconds(1);
+        // The game, VI, audio, and renderer all run on their own paced threads.
+        // The main loop only pumps host window events and menu hotkeys, so a
+        // 1 ms wake cadence just adds foreground scheduling pressure on Windows.
+        ultramodern::sleep_milliseconds(8);
         if (gfx_callbacks.update_gfx != nullptr) {
             gfx_callbacks.update_gfx(gfx_data);
         }

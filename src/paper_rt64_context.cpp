@@ -302,20 +302,41 @@ namespace {
 
             RT64::ApplicationConfiguration app_config;
             app_config.useConfigurationFile = false;
-            app = std::make_unique<RT64::Application>(core, app_config);
-
             auto config = ultramodern::renderer::get_graphics_config();
-            apply_user_config(app.get(), config);
-            app->userConfig.developerMode = developer_mode;
-            app->enhancementConfig.f3dex.forceBranch = true;
-            app->enhancementConfig.textureLOD.scale = true;
 
             uint32_t thread_id = 0;
 #ifdef _WIN32
             thread_id = window_handle.thread_id;
 #endif
-            setup_result = map_setup_result(app->setup(thread_id));
-            chosen_api = map_graphics_api(app->chosenGraphicsAPI);
+
+            auto setup_app = [&](const ultramodern::renderer::GraphicsConfig& setup_config) {
+                app = std::make_unique<RT64::Application>(core, app_config);
+                apply_user_config(app.get(), setup_config);
+                app->userConfig.developerMode = developer_mode;
+                app->enhancementConfig.f3dex.forceBranch = true;
+                app->enhancementConfig.textureLOD.scale = true;
+
+                setup_result = map_setup_result(app->setup(thread_id));
+                chosen_api = map_graphics_api(app->chosenGraphicsAPI);
+                return setup_result == ultramodern::renderer::SetupResult::Success;
+            };
+
+            if (config.api_option == ultramodern::renderer::GraphicsApi::Auto) {
+                // Vulkan avoids the D3D12 foreground swapchain path that can starve
+                // desktop video playback on some multi-monitor Windows systems.
+                auto vulkan_config = config;
+                vulkan_config.api_option = ultramodern::renderer::GraphicsApi::Vulkan;
+                if (!setup_app(vulkan_config)) {
+                    app.reset();
+                    auto d3d12_config = config;
+                    d3d12_config.api_option = ultramodern::renderer::GraphicsApi::D3D12;
+                    setup_app(d3d12_config);
+                }
+            }
+            else {
+                setup_app(config);
+            }
+
             if (setup_result != ultramodern::renderer::SetupResult::Success) {
                 app.reset();
                 return;
