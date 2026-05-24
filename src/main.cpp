@@ -74,7 +74,10 @@ namespace {
     void show_info_message(const char* msg);
     std::filesystem::path app_base_path();
     std::filesystem::path app_executable_path();
+    std::filesystem::path texture_root_path();
     std::filesystem::path texture_replacement_path();
+    std::filesystem::path texture_dump_path();
+    bool ensure_texture_folder_layout();
     bool ensure_texture_replacement_database(const std::filesystem::path& directory);
 
 #ifdef _WIN32
@@ -87,9 +90,9 @@ namespace {
     HWND fps_overlay_window = nullptr;
     bool fps_overlay_enabled = false;
     HWND texture_replacement_window = nullptr;
-    HWND texture_easy_mode_checkbox = nullptr;
+    HWND texture_live_replacement_checkbox = nullptr;
     HWND texture_status_label = nullptr;
-    bool texture_easy_mode_enabled = false;
+    bool texture_live_replacement_enabled = false;
     std::atomic<uint32_t> fps_vi_ticks{0};
     uint64_t fps_last_presented_frames = 0;
     std::chrono::steady_clock::time_point fps_last_sample = std::chrono::steady_clock::now();
@@ -107,7 +110,7 @@ namespace {
     constexpr UINT_PTR menu_command_controller_setup = 40040;
     constexpr UINT_PTR menu_command_rebind_keys = 40041;
     constexpr UINT_PTR menu_command_input_profiles = 40042;
-    constexpr UINT_PTR texture_command_easy_mode = 40100;
+    constexpr UINT_PTR texture_command_live_replacement = 40100;
     constexpr UINT_PTR texture_command_reload = 40101;
     constexpr UINT_PTR texture_command_open_folder = 40102;
 
@@ -365,36 +368,39 @@ namespace {
 
     void reload_texture_replacement_folder() {
         const std::filesystem::path directory = texture_replacement_path();
-        std::error_code error;
-        std::filesystem::create_directories(directory, error);
-        if (error || !ensure_texture_replacement_database(directory)) {
+        if (!ensure_texture_folder_layout()) {
             show_message("Paper Mario ReCut could not prepare the textures folder.");
             return;
         }
 
-        ultramodern::load_texture_replacements(directory);
+        if (texture_live_replacement_enabled) {
+            ultramodern::load_texture_replacements(directory);
+        }
         refresh_texture_replacement_window();
     }
 
-    void set_easy_texture_replacement_enabled(bool enabled) {
-        texture_easy_mode_enabled = enabled;
+    void set_live_texture_replacement_enabled(bool enabled) {
+        texture_live_replacement_enabled = enabled;
 
         if (enabled) {
-            reload_texture_replacement_folder();
-            ultramodern::start_texture_dumping(texture_replacement_path());
+            if (!ensure_texture_folder_layout()) {
+                texture_live_replacement_enabled = false;
+                show_message("Paper Mario ReCut could not prepare the texture replacement folder.");
+            }
+            else {
+                ultramodern::load_texture_replacements(texture_replacement_path());
+            }
         }
         else {
-            ultramodern::stop_texture_dumping();
+            ultramodern::clear_texture_replacements();
         }
 
         refresh_texture_replacement_window();
     }
 
     void open_texture_replacement_folder() {
-        const std::filesystem::path directory = texture_replacement_path();
-        std::error_code error;
-        std::filesystem::create_directories(directory, error);
-        ensure_texture_replacement_database(directory);
+        const std::filesystem::path directory = texture_root_path();
+        ensure_texture_folder_layout();
 
         std::wstring command_line = L"explorer.exe \"" + directory.wstring() + L"\"";
         STARTUPINFOW startup_info{};
@@ -421,25 +427,21 @@ namespace {
             return;
         }
 
-        if (texture_easy_mode_checkbox) {
+        if (texture_live_replacement_checkbox) {
             CheckDlgButton(
                 texture_replacement_window,
-                static_cast<int>(texture_command_easy_mode),
-                texture_easy_mode_enabled ? BST_CHECKED : BST_UNCHECKED);
+                static_cast<int>(texture_command_live_replacement),
+                texture_live_replacement_enabled ? BST_CHECKED : BST_UNCHECKED);
         }
 
         if (texture_status_label) {
             const bool loaded = ultramodern::is_texture_replacement_loaded();
-            const bool dumping = ultramodern::is_texture_dumping();
-            const wchar_t* status = L"PNG texture folders ready.";
-            if (texture_easy_mode_enabled && dumping) {
-                status = L"Easy mode on. Dumping live PNG textures.";
+            const wchar_t* status = L"Live replacement off. Originals are not auto-loaded.";
+            if (texture_live_replacement_enabled && loaded) {
+                status = L"Live replacement on. Watching replacements folder.";
             }
-            else if (texture_easy_mode_enabled) {
-                status = L"Easy mode starting.";
-            }
-            else if (loaded) {
-                status = L"Textures folder loaded with live reload.";
+            else if (texture_live_replacement_enabled) {
+                status = L"Live replacement starting.";
             }
             SetWindowTextW(texture_status_label, status);
         }
@@ -450,11 +452,11 @@ namespace {
         case WM_CREATE: {
             HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 
-            texture_easy_mode_checkbox = CreateWindowExW(
-                0, L"BUTTON", L"Easy mode replacement",
+            texture_live_replacement_checkbox = CreateWindowExW(
+                0, L"BUTTON", L"Live Texture Replacement",
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                18, 18, 210, 24,
-                hwnd, reinterpret_cast<HMENU>(texture_command_easy_mode), GetModuleHandleW(nullptr), nullptr);
+                18, 18, 230, 24,
+                hwnd, reinterpret_cast<HMENU>(texture_command_live_replacement), GetModuleHandleW(nullptr), nullptr);
 
             HWND reload_button = CreateWindowExW(
                 0, L"BUTTON", L"Reload Folder",
@@ -469,12 +471,12 @@ namespace {
                 hwnd, reinterpret_cast<HMENU>(texture_command_open_folder), GetModuleHandleW(nullptr), nullptr);
 
             texture_status_label = CreateWindowExW(
-                0, L"STATIC", L"PNG texture folders ready.",
+                0, L"STATIC", L"Live replacement off. Originals are not auto-loaded.",
                 WS_CHILD | WS_VISIBLE | SS_LEFT,
-                18, 98, 330, 24,
+                18, 98, 380, 24,
                 hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
 
-            SendMessageW(texture_easy_mode_checkbox, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            SendMessageW(texture_live_replacement_checkbox, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(reload_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(open_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(texture_status_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -483,10 +485,10 @@ namespace {
         }
         case WM_COMMAND:
             switch (LOWORD(wparam)) {
-            case texture_command_easy_mode:
+            case texture_command_live_replacement:
                 if (HIWORD(wparam) == BN_CLICKED) {
-                    const bool enabled = IsDlgButtonChecked(hwnd, static_cast<int>(texture_command_easy_mode)) == BST_CHECKED;
-                    set_easy_texture_replacement_enabled(enabled);
+                    const bool enabled = IsDlgButtonChecked(hwnd, static_cast<int>(texture_command_live_replacement)) == BST_CHECKED;
+                    set_live_texture_replacement_enabled(enabled);
                     return 0;
                 }
                 break;
@@ -503,7 +505,7 @@ namespace {
             return 0;
         case WM_DESTROY:
             texture_replacement_window = nullptr;
-            texture_easy_mode_checkbox = nullptr;
+            texture_live_replacement_checkbox = nullptr;
             texture_status_label = nullptr;
             return 0;
         }
@@ -532,7 +534,7 @@ namespace {
 
             RECT owner_rect{};
             GetWindowRect(main_window, &owner_rect);
-            constexpr int dialog_width = 370;
+            constexpr int dialog_width = 420;
             constexpr int dialog_height = 170;
             const int owner_width = static_cast<int>(owner_rect.right - owner_rect.left);
             const int owner_height = static_cast<int>(owner_rect.bottom - owner_rect.top);
@@ -561,7 +563,7 @@ namespace {
             DestroyWindow(texture_replacement_window);
             texture_replacement_window = nullptr;
         }
-        texture_easy_mode_checkbox = nullptr;
+        texture_live_replacement_checkbox = nullptr;
         texture_status_label = nullptr;
     }
 
@@ -1175,8 +1177,46 @@ namespace {
         return base;
     }
 
-    std::filesystem::path texture_replacement_path() {
+    std::filesystem::path texture_root_path() {
         return app_base_path() / "textures";
+    }
+
+    std::filesystem::path texture_replacement_path() {
+        return texture_root_path() / "replacements";
+    }
+
+    std::filesystem::path texture_dump_path() {
+        return texture_root_path() / "dumps";
+    }
+
+    bool ensure_texture_folder_layout() {
+        std::error_code error;
+        const std::filesystem::path root = texture_root_path();
+        const std::filesystem::path starter_folders[] = {
+            texture_replacement_path() / "sprites" / "unassigned",
+            texture_replacement_path() / "models" / "unassigned",
+            texture_replacement_path() / "masks" / "unassigned",
+            texture_replacement_path() / "misc" / "unassigned",
+            texture_dump_path() / "sprites" / "unassigned",
+            texture_dump_path() / "models" / "unassigned",
+            texture_dump_path() / "masks" / "unassigned",
+            texture_dump_path() / "misc" / "unassigned",
+            texture_dump_path() / "_debug" / "raw"
+        };
+
+        std::filesystem::create_directories(root, error);
+        if (error) {
+            return false;
+        }
+
+        for (const std::filesystem::path& starter_folder : starter_folders) {
+            std::filesystem::create_directories(starter_folder, error);
+            if (error) {
+                return false;
+            }
+        }
+
+        return ensure_texture_replacement_database(texture_replacement_path());
     }
 
     bool ensure_texture_replacement_database(const std::filesystem::path& directory) {
@@ -1184,20 +1224,6 @@ namespace {
         std::filesystem::create_directories(directory, error);
         if (error) {
             return false;
-        }
-
-        const std::filesystem::path starter_folders[] = {
-            directory / "sprites" / "unassigned",
-            directory / "models" / "unassigned",
-            directory / "masks" / "unassigned",
-            directory / "misc" / "unassigned",
-            directory / "_debug" / "raw"
-        };
-        for (const std::filesystem::path& starter_folder : starter_folders) {
-            std::filesystem::create_directories(starter_folder, error);
-            if (error) {
-                return false;
-            }
         }
 
         const std::filesystem::path database_path = directory / "rt64.json";
@@ -1448,10 +1474,9 @@ int main(int argc, char** argv) {
         recomp::start_game(game_id);
     }).detach();
 
-    const std::filesystem::path textures_path = texture_replacement_path();
+    const std::filesystem::path textures_path = texture_root_path();
     if (std::filesystem::is_directory(textures_path)) {
-        ensure_texture_replacement_database(textures_path);
-        ultramodern::set_startup_texture_replacement_directory(textures_path);
+        ensure_texture_folder_layout();
     }
 
     recomp::start(

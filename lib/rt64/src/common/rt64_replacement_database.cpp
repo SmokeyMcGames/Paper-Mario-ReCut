@@ -192,6 +192,16 @@ namespace RT64 {
             }
         };
 
+        // Paper Mario ReCut's live replacement folder starts with an empty database.
+        // Accept RT64 hash-named PNG/DDS files directly so artists can copy a dumped
+        // texture into the replacement folder and edit it without hand-editing JSON.
+        if (!onlyDDS && textures.empty() && (config.autoPath == ReplacementAutoPath::RT64)) {
+            for (const auto &it : autoPathMap) {
+                addResolvedPath(ReplacementDatabase::stringToHash(it.first), it.second, ReplacementOperation::Auto, ReplacementShift::Auto);
+            }
+            return;
+        }
+
         // Assign paths to all entries in the database.
         // If the entry already has a relative path, look for textures with extensions that are valid.
         // If the entry doesn't have a path but uses auto-path logic, then it'll try to resolve the path using that scheme.
