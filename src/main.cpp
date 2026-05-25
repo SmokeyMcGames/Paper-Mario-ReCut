@@ -201,6 +201,12 @@ namespace {
         return settings;
     }
 
+    void sanitize_recut_graphics_config(ultramodern::renderer::GraphicsConfig& config) {
+        config.wm_option = ultramodern::renderer::WindowMode::Windowed;
+        config.rr_option = ultramodern::renderer::RefreshRate::Original;
+        config.rr_manual_value = 60;
+    }
+
     std::mutex settings_mutex;
     AudioSettings audio_settings{};
     AppInputSettings input_settings = make_default_input_settings();
@@ -1044,16 +1050,9 @@ namespace {
         combo_select_clamped(graphics_framebuffer_combo, static_cast<int>(config.hpfb_option));
 
         SendMessageW(graphics_refresh_combo, CB_RESETCONTENT, 0, 0);
-        combo_add(graphics_refresh_combo, L"Original");
-        combo_add(graphics_refresh_combo, L"Display");
-        combo_add(graphics_refresh_combo, L"60 Hz");
-        combo_add(graphics_refresh_combo, L"120 Hz");
-        combo_add(graphics_refresh_combo, L"144 Hz");
-        int refresh_index = static_cast<int>(config.rr_option);
-        if (config.rr_option == ultramodern::renderer::RefreshRate::Manual) {
-            refresh_index = config.rr_manual_value >= 144 ? 4 : (config.rr_manual_value >= 120 ? 3 : 2);
-        }
-        combo_select_clamped(graphics_refresh_combo, refresh_index);
+        combo_add(graphics_refresh_combo, L"Original 60 VI");
+        combo_select_clamped(graphics_refresh_combo, 0);
+        EnableWindow(graphics_refresh_combo, FALSE);
 
         SendMessageW(graphics_upscale_2d_combo, CB_RESETCONTENT, 0, 0);
         combo_add(graphics_upscale_2d_combo, L"Scaled 2D Only");
@@ -1081,7 +1080,11 @@ namespace {
         }
         combo_select_clamped(graphics_hardware_resolve_combo, hardware_index);
 
-        CheckDlgButton(graphics_options_window, static_cast<int>(menu_command_fullscreen), config.wm_option == ultramodern::renderer::WindowMode::Fullscreen ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(graphics_options_window, static_cast<int>(menu_command_fullscreen), BST_UNCHECKED);
+        if (graphics_fullscreen_checkbox) {
+            ShowWindow(graphics_fullscreen_checkbox, SW_HIDE);
+            EnableWindow(graphics_fullscreen_checkbox, FALSE);
+        }
         CheckDlgButton(graphics_options_window, static_cast<int>(graphics_command_apply + 20), config.three_point_filtering ? BST_CHECKED : BST_UNCHECKED);
     }
 
@@ -1098,9 +1101,7 @@ namespace {
             config.resolution_multiplier = choice.multiplier;
         }
 
-        config.wm_option = IsDlgButtonChecked(graphics_options_window, static_cast<int>(menu_command_fullscreen)) == BST_CHECKED
-            ? ultramodern::renderer::WindowMode::Fullscreen
-            : ultramodern::renderer::WindowMode::Windowed;
+        config.wm_option = ultramodern::renderer::WindowMode::Windowed;
         config.ar_option = combo_selection(graphics_aspect_combo) == 1
             ? ultramodern::renderer::AspectRatio::Expand
             : ultramodern::renderer::AspectRatio::Original;
@@ -1151,27 +1152,8 @@ namespace {
 
         config.hpfb_option = static_cast<ultramodern::renderer::HighPrecisionFramebuffer>(std::clamp(combo_selection(graphics_framebuffer_combo), 0, 2));
 
-        switch (combo_selection(graphics_refresh_combo)) {
-        case 1:
-            config.rr_option = ultramodern::renderer::RefreshRate::Display;
-            break;
-        case 2:
-            config.rr_option = ultramodern::renderer::RefreshRate::Manual;
-            config.rr_manual_value = 60;
-            break;
-        case 3:
-            config.rr_option = ultramodern::renderer::RefreshRate::Manual;
-            config.rr_manual_value = 120;
-            break;
-        case 4:
-            config.rr_option = ultramodern::renderer::RefreshRate::Manual;
-            config.rr_manual_value = 144;
-            break;
-        default:
-            config.rr_option = ultramodern::renderer::RefreshRate::Original;
-            config.rr_manual_value = 60;
-            break;
-        }
+        config.rr_option = ultramodern::renderer::RefreshRate::Original;
+        config.rr_manual_value = 60;
 
         switch (combo_selection(graphics_upscale_2d_combo)) {
         case 1:
@@ -1198,6 +1180,7 @@ namespace {
         }
 
         config.three_point_filtering = IsDlgButtonChecked(graphics_options_window, static_cast<int>(graphics_command_apply + 20)) == BST_CHECKED;
+        sanitize_recut_graphics_config(config);
         ultramodern::renderer::set_graphics_config(config);
         save_recut_settings();
     }
@@ -1221,7 +1204,7 @@ namespace {
             graphics_downsample_combo = create_combo(hwnd, menu_command_resolution + 5, 178, 194, 270);
             create_label(hwnd, L"Framebuffer", 18, 234, 150);
             graphics_framebuffer_combo = create_combo(hwnd, menu_command_resolution + 6, 178, 230, 270);
-            create_label(hwnd, L"Refresh rate", 18, 270, 150);
+            create_label(hwnd, L"Game timing", 18, 270, 150);
             graphics_refresh_combo = create_combo(hwnd, menu_command_resolution + 7, 178, 266, 270);
             create_label(hwnd, L"2D upscaling", 18, 306, 150);
             graphics_upscale_2d_combo = create_combo(hwnd, menu_command_resolution + 8, 178, 302, 270);
@@ -3161,6 +3144,7 @@ namespace {
                 graphics_config.rr_manual_value = graphics.value("refreshRateTarget", graphics_config.rr_manual_value);
                 graphics_config.ds_option = graphics.value("downsampleMultiplier", graphics_config.ds_option);
                 graphics_config.anisotropic_filtering = graphics.value("anisotropicFiltering", graphics_config.anisotropic_filtering);
+                sanitize_recut_graphics_config(graphics_config);
                 ultramodern::renderer::set_graphics_config(graphics_config);
             }
 
@@ -3208,6 +3192,7 @@ namespace {
         }
 
         auto graphics_config = ultramodern::renderer::get_graphics_config();
+        sanitize_recut_graphics_config(graphics_config);
         nlohmann::json settings_json{};
         settings_json["graphics"] = {
             { "graphicsApi", graphics_config.api_option },

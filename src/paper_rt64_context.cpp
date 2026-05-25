@@ -232,8 +232,10 @@ namespace {
         app->userConfig.filtering = to_rt64(config.filtering_option);
         app->userConfig.upscale2D = to_rt64(config.upscale_2d);
         app->userConfig.threePointFiltering = config.three_point_filtering;
-        app->userConfig.refreshRate = to_rt64(config.rr_option);
-        app->userConfig.refreshRateTarget = std::clamp(config.rr_manual_value, 10, 1000);
+        // ReCut must not pace Paper Mario from the desktop monitor mode. The game
+        // owns its 60 VI cadence; display refresh is only a presentation detail.
+        app->userConfig.refreshRate = RT64::UserConfiguration::RefreshRate::Original;
+        app->userConfig.refreshRateTarget = 60;
         app->userConfig.internalColorFormat = to_rt64(config.hpfb_option);
         app->userConfig.displayBuffering = to_rt64(config.display_buffering);
         app->userConfig.hardwareResolve = to_rt64(config.hardware_resolve);
@@ -342,9 +344,7 @@ namespace {
                 return;
             }
             app->updateSamplerAnisotropy(std::clamp(config.anisotropic_filtering, 1, 16));
-            if (config.wm_option == ultramodern::renderer::WindowMode::Fullscreen) {
-                app->setFullScreen(true);
-            }
+            app->setFullScreen(false);
 
             default_texture_replacement_directory = ultramodern::get_startup_texture_replacement_directory();
         }
@@ -378,7 +378,7 @@ namespace {
                 app->updateSamplerAnisotropy(std::clamp(new_config.anisotropic_filtering, 1, 16));
             }
             if (new_config.wm_option != old_config.wm_option) {
-                app->setFullScreen(new_config.wm_option == ultramodern::renderer::WindowMode::Fullscreen);
+                app->setFullScreen(false);
             }
             return true;
         }
@@ -407,7 +407,7 @@ namespace {
         }
 
         uint32_t get_display_framerate() const override {
-            return app ? app->presentQueue->ext.sharedResources->swapChainRate : 60;
+            return 60;
         }
 
         uint64_t get_presented_frame_count() const override {

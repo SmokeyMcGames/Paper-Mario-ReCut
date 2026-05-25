@@ -475,7 +475,14 @@ namespace RT64 {
         int processCursor = -1;
         bool skipPresent = false;
         uint32_t displayTimingRate = UINT32_MAX;
+#ifdef _WIN32
+        // ReCut does not drive game speed from the monitor, and querying
+        // foreground display timing every present can pull Windows into a
+        // special presentation path on VRR/multi-monitor setups.
+        const bool displayTiming = false;
+#else
         const bool displayTiming = ext.device->getCapabilities().displayTiming;
+#endif
         bool swapChainValid = !ext.swapChain->needsResize();
         while (presentThreadRunning) {
             {
