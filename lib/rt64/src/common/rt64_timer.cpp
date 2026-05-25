@@ -68,7 +68,11 @@ namespace RT64 {
             waitStart = afterSleep;
         }
 
-        // Spin until the end time is reached.
-        while (std::chrono::high_resolution_clock::now() < endTime);
+        // Yield instead of burning a CPU core for the last sliver of frame
+        // timing. ReCut favors keeping the desktop responsive over sub-ms
+        // busy-wait precision.
+        while (std::chrono::high_resolution_clock::now() < endTime) {
+            std::this_thread::yield();
+        }
     }
 };
