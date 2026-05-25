@@ -60,6 +60,55 @@ std::unique_ptr<recomp::mods::ModContext> mod_context = std::make_unique<recomp:
 recomp::Version project_version;
 // The current game's save type.
 recomp::SaveType save_type = recomp::SaveType::None;
+std::atomic<uint8_t*> active_rdram = nullptr;
+
+namespace {
+    constexpr size_t save_state_memory_size = 64ULL * 1024ULL * 1024ULL;
+    constexpr uint32_t save_state_version = 1;
+
+    struct SaveStateHeader {
+        char magic[16];
+        uint32_t version;
+        uint32_t memory_size;
+        uint32_t context_size;
+        uint32_t reserved;
+    };
+
+    struct PendingSaveState {
+        std::vector<uint8_t> memory;
+        recomp_context context;
+    };
+
+    std::mutex save_state_mutex;
+    bool save_state_has_context = false;
+    recomp_context save_state_last_context{};
+    std::optional<PendingSaveState> pending_load_state;
+
+    constexpr char save_state_magic[16] = {
+        'P', 'M', 'R', 'C', 'S', 'T', 'A', 'T', 'E', '\0', '\0', '\0', '\0', '\0', '\0', '\0'
+    };
+
+    void repair_context_pointers(recomp_context& ctx) {
+        ctx.f_odd = ctx.mips3_float_mode ? &ctx.f1.u32l : &ctx.f0.u32h;
+    }
+
+    SaveStateHeader make_save_state_header() {
+        SaveStateHeader header{};
+        std::memcpy(header.magic, save_state_magic, sizeof(header.magic));
+        header.version = save_state_version;
+        header.memory_size = static_cast<uint32_t>(save_state_memory_size);
+        header.context_size = static_cast<uint32_t>(sizeof(recomp_context));
+        return header;
+    }
+
+    bool is_valid_save_state_header(const SaveStateHeader& header) {
+        return
+            std::memcmp(header.magic, save_state_magic, sizeof(header.magic)) == 0 &&
+            header.version == save_state_version &&
+            header.memory_size == save_state_memory_size &&
+            header.context_size == sizeof(recomp_context);
+    }
+}
 
 std::u8string recomp::GameEntry::stored_filename() const {
     return game_id + u8".z64";
@@ -181,6 +230,140 @@ bool write_file(const std::filesystem::path& path, const std::vector<uint8_t>& d
     out_file.write(reinterpret_cast<const char*>(data.data()), data.size());
 
     return true;
+}
+
+recomp::SaveStateResult recomp::save_state_to_file(const std::filesystem::path& path) {
+    uint8_t* rdram = active_rdram.load(std::memory_order_acquire);
+    if (rdram == nullptr || !ultramodern::is_game_started()) {
+        return SaveStateResult::GameNotRunning;
+    }
+
+    recomp_context context{};
+    {
+        std::lock_guard lock{ save_state_mutex };
+        if (!save_state_has_context) {
+            return SaveStateResult::MissingContext;
+        }
+        context = save_state_last_context;
+    }
+    repair_context_pointers(context);
+
+    std::vector<uint8_t> memory(save_state_memory_size);
+    std::memcpy(memory.data(), rdram, memory.size());
+
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) {
+        return SaveStateResult::FileWriteFailed;
+    }
+
+    std::ofstream out_file{ path, std::ios::binary | std::ios::trunc };
+    if (!out_file.good()) {
+        return SaveStateResult::FileWriteFailed;
+    }
+
+    const SaveStateHeader header = make_save_state_header();
+    out_file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    out_file.write(reinterpret_cast<const char*>(&context), sizeof(context));
+    out_file.write(reinterpret_cast<const char*>(memory.data()), memory.size());
+    if (!out_file.good()) {
+        return SaveStateResult::FileWriteFailed;
+    }
+
+    return SaveStateResult::Success;
+}
+
+recomp::SaveStateResult recomp::load_state_from_file(const std::filesystem::path& path) {
+    if (active_rdram.load(std::memory_order_acquire) == nullptr || !ultramodern::is_game_started()) {
+        return SaveStateResult::GameNotRunning;
+    }
+
+    {
+        std::lock_guard lock{ save_state_mutex };
+        if (pending_load_state.has_value()) {
+            return SaveStateResult::Busy;
+        }
+    }
+
+    std::ifstream in_file{ path, std::ios::binary };
+    if (!in_file.good()) {
+        return SaveStateResult::FileReadFailed;
+    }
+
+    SaveStateHeader header{};
+    in_file.read(reinterpret_cast<char*>(&header), sizeof(header));
+    if (!in_file.good() || !is_valid_save_state_header(header)) {
+        return SaveStateResult::InvalidFile;
+    }
+
+    PendingSaveState state{};
+    in_file.read(reinterpret_cast<char*>(&state.context), sizeof(state.context));
+    if (!in_file.good()) {
+        return SaveStateResult::InvalidFile;
+    }
+    repair_context_pointers(state.context);
+
+    state.memory.resize(save_state_memory_size);
+    in_file.read(reinterpret_cast<char*>(state.memory.data()), state.memory.size());
+    if (!in_file.good()) {
+        return SaveStateResult::InvalidFile;
+    }
+
+    std::lock_guard lock{ save_state_mutex };
+    pending_load_state = std::move(state);
+    return SaveStateResult::Success;
+}
+
+const char* recomp::save_state_result_message(SaveStateResult result) {
+    switch (result) {
+        case SaveStateResult::Success:
+            return "OK";
+        case SaveStateResult::GameNotRunning:
+            return "The game is not running yet.";
+        case SaveStateResult::MissingContext:
+            return "The game has not reached a safe save point yet. Try again after the next screen update.";
+        case SaveStateResult::FileReadFailed:
+            return "Could not read that save-state slot.";
+        case SaveStateResult::FileWriteFailed:
+            return "Could not write that save-state slot.";
+        case SaveStateResult::InvalidFile:
+            return "That save-state slot is missing or invalid.";
+        case SaveStateResult::Busy:
+            return "A save-state load is already queued.";
+    }
+    return "Unknown save-state error.";
+}
+
+void recomp::service_save_state(uint8_t* rdram, recomp_context* context) {
+    active_rdram.store(rdram, std::memory_order_release);
+
+    std::optional<PendingSaveState> load_state;
+    {
+        std::lock_guard lock{ save_state_mutex };
+        if (pending_load_state.has_value()) {
+            load_state = std::move(pending_load_state);
+            pending_load_state.reset();
+        }
+    }
+
+    if (load_state.has_value()) {
+        std::memcpy(rdram, load_state->memory.data(), load_state->memory.size());
+        *context = load_state->context;
+        repair_context_pointers(*context);
+
+        std::lock_guard lock{ save_state_mutex };
+        save_state_last_context = *context;
+        save_state_has_context = true;
+        return;
+    }
+
+    recomp_context context_copy = *context;
+    repair_context_pointers(context_copy);
+    {
+        std::lock_guard lock{ save_state_mutex };
+        save_state_last_context = context_copy;
+        save_state_has_context = true;
+    }
 }
 
 bool check_stored_rom(const recomp::GameEntry& game_entry) {
@@ -801,6 +984,7 @@ void recomp::start(
         ultramodern::error_handling::message_box("Failed to allocate memory!");
         return;
     }
+    active_rdram.store(rdram, std::memory_order_release);
 
     recomp::register_heap_exports();
     recomp::mods::register_config_exports();
@@ -849,4 +1033,5 @@ void recomp::start(
     if (free_failed) {
         printf("Failed to free rdram\n");
     }
+    active_rdram.store(nullptr, std::memory_order_release);
 }

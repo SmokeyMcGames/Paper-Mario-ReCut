@@ -1,6 +1,7 @@
 #include <memory>
 #include <ultramodern/ultra64.h>
 #include <ultramodern/ultramodern.hpp>
+#include "librecomp/game.hpp"
 #include "recomp.h"
 
 extern "C" void osInitialize_recomp(uint8_t * rdram, recomp_context * ctx) {
@@ -51,14 +52,17 @@ extern "C" void osCreateMesgQueue_recomp(uint8_t* rdram, recomp_context* ctx) {
 
 extern "C" void osRecvMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
     ctx->r2 = osRecvMesg(rdram, (int32_t)ctx->r4, (int32_t)ctx->r5, (s32)ctx->r6);
+    recomp::service_save_state(rdram, ctx);
 }
 
 extern "C" void osSendMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
     ctx->r2 = osSendMesg(rdram, (int32_t)ctx->r4, (OSMesg)ctx->r5, (s32)ctx->r6);
+    recomp::service_save_state(rdram, ctx);
 }
 
 extern "C" void osJamMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
     ctx->r2 = osJamMesg(rdram, (int32_t)ctx->r4, (OSMesg)ctx->r5, (s32)ctx->r6);
+    recomp::service_save_state(rdram, ctx);
 }
 
 extern "C" void osSetEventMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
@@ -67,6 +71,7 @@ extern "C" void osSetEventMesg_recomp(uint8_t* rdram, recomp_context* ctx) {
 
 extern "C" void osViSetEvent_recomp(uint8_t * rdram, recomp_context * ctx) {
     osViSetEvent(rdram, (int32_t)ctx->r4, (OSMesg)ctx->r5, (u32)ctx->r6);
+    recomp::service_save_state(rdram, ctx);
 }
 
 extern "C" void osGetCount_recomp(uint8_t * rdram, recomp_context * ctx) {
@@ -92,10 +97,12 @@ extern "C" void osSetTimer_recomp(uint8_t * rdram, recomp_context * ctx) {
     uint64_t countdown = ((uint64_t)(ctx->r6) << 32) | ((ctx->r7) & 0xFFFFFFFFu);
     uint64_t interval = load_doubleword(rdram, ctx->r29, 0x10);
     ctx->r2 = osSetTimer(rdram, (int32_t)ctx->r4, countdown, interval, (int32_t)MEM_W(0x18, ctx->r29), (OSMesg)MEM_W(0x1C, ctx->r29));
+    recomp::service_save_state(rdram, ctx);
 }
 
 extern "C" void osStopTimer_recomp(uint8_t * rdram, recomp_context * ctx) {
     ctx->r2 = osStopTimer(rdram, (int32_t)ctx->r4);
+    recomp::service_save_state(rdram, ctx);
 }
 
 extern "C" void osVirtualToPhysical_recomp(uint8_t * rdram, recomp_context * ctx) {

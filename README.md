@@ -1,25 +1,66 @@
 # Paper Mario ReCut
 
-Paper Mario ReCut is a native PC recompilation project for Paper Mario on Nintendo 64.
+![Paper Mario ReCut title logo](assets/title_logo.png)
 
-This repository does not include ROM files, extracted ROM assets, save files, or generated ROM-derived recomp output. The app prompts for a legally dumped Paper Mario (U) ROM on first run and installs a local validated copy into that user's own `user` folder.
+Paper Mario ReCut is a native Windows PC recompilation project for *Paper Mario* on Nintendo 64. It is built around the N64 recompilation toolchain, RT64 rendering, local legal ROM setup, live texture replacement, and the bundled Paper Atlas Tool for editing dumped texture pieces.
 
-## Runtime Notes
+This repository does not include ROM files, extracted ROM assets, save files, or generated ROM-derived recomp output. On first run, the app asks for your legally dumped Paper Mario (U) ROM, validates it, and installs a local copy into that user's own `user` folder.
 
-- Press F1 in-game to show or hide the early Windows menu bar for File, Graphics, and Controls.
-- Press F8 in-game to open Texture Replacement. Live Texture Replacement loads edited PNG/DDS files from `user/textures/replacements/` and hot-reloads them while enabled.
+## Features
 
-Paper Mario ReCut includes a small built-in texture replacement pack compiled into the Windows executable. Those hashes are always loaded and are restored from the exe at startup, even when Live Texture Replacement is disabled.
+- Native Windows executable for Paper Mario ReCut.
+- First-run legal ROM setup with local validation.
+- Windowed RT64 renderer integration.
+- Windows menu bar toggled with F1.
+- File menu with exit/restart and Save State / Load State submenus for slots 1-5.
+- Graphics options menu with live-applying renderer settings.
+- Texture Replacement window toggled with F8.
+- Live Texture Replacement toggle, also available with F2.
+- One-shot texture dumping with an in-window progress bar.
+- Built-in ReCut texture pack embedded in the executable.
+- Editable Paper Atlas Tool sidecar built from source in this repo.
+- Paper Atlas auto-selects `user/textures/dumps` and `user/textures/replacements` when launched beside the game.
+- Paper Atlas saves combined atlas work to `user/AtlasEditing` so dump folders stay clean.
+- Paper Atlas can group pieces by similar resolution to make preview cleanup easier.
+- Controller and keyboard configuration windows are present and still being expanded.
 
-Texture replacement folders are local runtime data under `user/textures/`. Original dumps belong under `user/textures/dumps/`, replacement packs belong under `user/textures/replacements/`, and only the replacement folder is loaded by the live replacement toggle. The Dump Textures button performs a short current-scene dump pass while game input is held, then writes ordered PNG v5 files named like `000001_0123456789abcdef.v5.png` directly under `user/textures/dumps/`. Hash-named or ordered PNG/DDS files copied into `user/textures/replacements/` can be hot-loaded without hand-editing `rt64.json` and will override the built-in pack when Live Texture Replacement is on. Keep ROM files, saves, generated recomp output, local dumps, local replacement experiments, and the `user` folder out of commits unless a future legal texture pack is intentionally authored from scratch.
+## Current Status
 
-Paper Atlas Tool lives in editable source form at `tools/PaperAtlasTool/`. Windows builds publish `PaperAtlasTool.exe` beside `PaperMarioReCut.exe`; the Texture Replacement window and Graphics menu can launch it as a sidecar editor pointed at the dump and replacement folders.
+This is still an early working build. The game boots and the tooling is actively being shaped around Paper Mario rather than Zelda Recompiled.
 
-## Legal ROM Requirement
+Save states are implemented as an early runtime snapshot system. They capture the active recomp memory window plus the current recompiled CPU context and store slots in `user/states/`. Treat them as testable while the runtime continues to mature.
 
-You must provide your own legally dumped Paper Mario (U) ROM. Do not commit or distribute ROMs, save files, generated ROM output, or local `user` folders.
+Known issue: widescreen is currently broken, but it is still exposed for testing. Expect visual problems if you enable it. The normal 4:3 path is the intended play path for now.
 
-The `.gitignore` intentionally blocks common N64 ROM/save extensions and local runtime folders.
+## Runtime Folders
+
+Local runtime data lives under:
+
+```text
+user/
+```
+
+Important subfolders:
+
+```text
+user/pm.n64.us.z64
+user/states/
+user/textures/dumps/
+user/textures/replacements/
+user/AtlasEditing/
+```
+
+Do not commit or distribute ROMs, save files, generated ROM output, local dumps, local replacements, or `user` folders.
+
+## Paper Atlas Tool
+
+Paper Atlas Tool is included as editable C# WinForms source at:
+
+```text
+tools/PaperAtlasTool/
+```
+
+Windows builds publish `PaperAtlasTool.exe` beside `PaperMarioReCut.exe`. You can open it from Graphics > Paper Atlas Tool or from the Texture Replacement window. If the expected dump or replacement folders are missing, the game and Atlas tool explain how to create them.
 
 ## Building
 
@@ -31,9 +72,50 @@ generated/paper_mario_recomp_out/
 
 That folder is intentionally not committed. Generate it locally from your own legal ROM before configuring CMake.
 
-Then build with CMake, Visual Studio 2022, and the .NET SDK:
+Requirements:
+
+- Visual Studio 2022 with C++ desktop tools.
+- CMake.
+- .NET 8 SDK for Paper Atlas Tool.
+
+Build:
 
 ```powershell
 cmake -S . -B build-recut -G "Visual Studio 17 2022" -A x64
 cmake --build build-recut --config Release
 ```
+
+The Windows build output is created in:
+
+```text
+build-recut/Release/
+```
+
+## Texture Replacement Instructions
+
+1. Start Paper Mario ReCut and load the scene whose textures you want to edit.
+2. Press F8, or open Graphics > Texture Replacement.
+3. Hover Dump Textures for a reminder of what it does.
+4. Press Dump Textures. Game input pauses briefly while the current scene's loaded textures are written as PNG v5 files to:
+
+```text
+user/textures/dumps/
+```
+
+5. Open Paper Atlas Tool from the Texture Replacement window or Graphics > Paper Atlas Tool.
+6. Paper Atlas auto-selects the dump and replacement folders when launched beside the game exe.
+7. Arrange pieces manually, use Auto Pack, Auto Edges, or Group Sizes.
+8. Save Atlas + Layout. The combined work files are saved to:
+
+```text
+user/AtlasEditing/
+```
+
+9. Edit `combined_texture.png` in your image editor.
+10. Return to Paper Atlas and split the atlas back to replacements. Output pieces are written to:
+
+```text
+user/textures/replacements/
+```
+
+11. In the game, enable Live Texture Replacement or press F2. You can also use Reload Folder after editing files.

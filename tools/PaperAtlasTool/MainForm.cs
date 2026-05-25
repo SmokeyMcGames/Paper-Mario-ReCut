@@ -83,9 +83,11 @@ public class MainForm : Form
     string imageEditorPath = "";
     readonly string startupFolder;
     readonly string startupReplacementsFolder;
+    readonly string startupUserFolder;
     readonly ContextMenuStrip pieceMenu = new();
     Piece? contextPiece = null;
     string lastSelectedLayoutFolder = "";
+    string userFolder = "";
 
     readonly string settingsDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -118,10 +120,11 @@ public class MainForm : Form
     readonly CheckBox scaledSplitCheck = new() { Text = "Scaled Split", Checked = true, AutoSize = true };
     readonly Label status = new() { Dock = DockStyle.Bottom, Height = 28, Padding = new Padding(8, 5, 8, 5) };
 
-    public MainForm(string startupFolder = "", string startupReplacementsFolder = "")
+    public MainForm(string startupFolder = "", string startupReplacementsFolder = "", string startupUserFolder = "")
     {
         this.startupFolder = startupFolder;
         this.startupReplacementsFolder = startupReplacementsFolder;
+        this.startupUserFolder = startupUserFolder;
 
         Text = "N64 Texture Atlas Editor";
         Font = new Font("Segoe UI", 9f);
@@ -141,6 +144,7 @@ public class MainForm : Form
         Shown += (_, _) =>
         {
             AskForEditorOnFirstStart();
+            ShowStartupFolderNotice();
             if (Directory.Exists(folder))
                 LoadPngs();
         };
@@ -150,7 +154,9 @@ public class MainForm : Form
 
     void ApplyStartupFolders()
     {
-        if (Directory.Exists(startupFolder))
+        userFolder = ResolveUserFolder();
+
+        if (!string.IsNullOrWhiteSpace(startupFolder))
         {
             folder = startupFolder;
             folderBox.Text = folder;
@@ -162,6 +168,72 @@ public class MainForm : Form
             replacementsBox.Text = replacementsFolder;
             SaveSettings();
         }
+    }
+
+    string ResolveUserFolder()
+    {
+        if (!string.IsNullOrWhiteSpace(startupUserFolder))
+            return startupUserFolder;
+
+        string inferred = InferUserFolderFromTextureFolder(startupFolder);
+        if (!string.IsNullOrWhiteSpace(inferred))
+            return inferred;
+
+        inferred = InferUserFolderFromTextureFolder(startupReplacementsFolder);
+        if (!string.IsNullOrWhiteSpace(inferred))
+            return inferred;
+
+        return Path.Combine(AppContext.BaseDirectory, "user");
+    }
+
+    static string InferUserFolderFromTextureFolder(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return "";
+
+        try
+        {
+            var directory = new DirectoryInfo(path);
+            if (directory.Parent?.Name.Equals("textures", StringComparison.OrdinalIgnoreCase) == true)
+                return directory.Parent.Parent?.FullName ?? "";
+        }
+        catch
+        {
+        }
+
+        return "";
+    }
+
+    string AtlasEditingFolder()
+    {
+        if (string.IsNullOrWhiteSpace(userFolder))
+            userFolder = ResolveUserFolder();
+
+        return Path.Combine(userFolder, "AtlasEditing");
+    }
+
+    void ShowStartupFolderNotice()
+    {
+        var missing = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+            missing.Add("Dump folder: " + (string.IsNullOrWhiteSpace(folder) ? "(not selected)" : folder));
+
+        if (string.IsNullOrWhiteSpace(replacementsFolder) || !Directory.Exists(replacementsFolder))
+            missing.Add("Replacement folder: " + (string.IsNullOrWhiteSpace(replacementsFolder) ? "(not selected)" : replacementsFolder));
+
+        if (missing.Count == 0)
+            return;
+
+        MessageBox.Show(
+            "Paper Atlas could not find the expected texture folder(s):\n\n" +
+            string.Join("\n", missing) +
+            "\n\nTo create them from Paper Mario ReCut, open Graphics > Texture Replacement. " +
+            "Press Dump Textures while the scene you want is visible to fill the dump folder. " +
+            "The replacements folder is where edited PNGs are written and loaded from.",
+            "Texture Folders Not Detected",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
     }
 
     Button Btn(string text, Action action, Color? color = null) => MakeThemedButton(text, action, color);
@@ -321,6 +393,7 @@ public class MainForm : Form
         layoutGroup.Controls.Add(MakeDivider());
         layoutGroup.Controls.Add(Btn("Auto Pack", () => { PushUndo(); AutoPack(); RefreshEverything(); }, ThemeYellow));
         layoutGroup.Controls.Add(Btn("Auto Edges", AutoEdges, ThemeYellow));
+        layoutGroup.Controls.Add(Btn("Group Sizes", GroupByResolutionSimilarity, ThemeYellow));
 
         var pieceGroup = MakeOptionGroup("Piece Actions");
         pieceGroup.Controls.Add(Btn("Remove", RemoveSelected, ThemeRed));
@@ -624,6 +697,25 @@ public class MainForm : Form
         }
     }
 
+    void OpenFolderInExplorer(string target)
+    {
+        try
+        {
+            if (!Directory.Exists(target))
+                Directory.CreateDirectory(target);
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = target,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Could not open folder:\n" + ex.Message);
+        }
+    }
+
     string GetOutputFolder(bool create)
     {
         replacementsFolder = replacementsBox.Text.Trim();
@@ -771,7 +863,7 @@ public class MainForm : Form
             int atlasWidth = Math.Max(1, bounds.Width);
             int atlasHeight = Math.Max(1, bounds.Height);
 
-            string root = Path.Combine(Path.GetTempPath(), "PaperAtlasTool", "SelectedLayouts");
+            string root = Path.Combine(AtlasEditingFolder(), "SelectedLayouts");
             string outputFolder = Path.Combine(root, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"));
             Directory.CreateDirectory(outputFolder);
 
@@ -1046,6 +1138,71 @@ public class MainForm : Form
             shelf = Math.Max(shelf, p.Image.Height);
         }
     }
+
+    void GroupByResolutionSimilarity()
+    {
+        var active = Active().Where(p => !p.Locked).ToList();
+        if (active.Count == 0)
+            return;
+
+        PushUndo();
+
+        int pad = Math.Max(2, (int)paddingBox.Value);
+        int groupGap = Math.Max(18, pad * 4);
+        int total = Math.Max(1, active.Sum(p => (p.Image.Width + pad) * (p.Image.Height + pad)));
+        int targetW = Math.Max(256, (int)Math.Sqrt(total * 1.35));
+        int x = 0;
+        int y = 0;
+        int shelf = 0;
+        int groups = 0;
+
+        foreach (var group in active
+            .GroupBy(p => ResolutionBucket(p.Image.Width, p.Image.Height))
+            .OrderBy(g => g.Key.Area)
+            .ThenBy(g => g.Key.Width)
+            .ThenBy(g => g.Key.Height))
+        {
+            if (groups > 0)
+            {
+                x = 0;
+                y += shelf + groupGap;
+                shelf = 0;
+            }
+
+            foreach (var p in group
+                .OrderBy(p => p.Image.Width * p.Image.Height)
+                .ThenBy(p => p.Image.Width)
+                .ThenBy(p => p.Image.Height)
+                .ThenBy(p => p.FileName, StringComparer.OrdinalIgnoreCase))
+            {
+                if (x > 0 && x + p.Image.Width > targetW)
+                {
+                    x = 0;
+                    y += shelf + pad;
+                    shelf = 0;
+                }
+
+                p.Bounds = new Rectangle(x, y, p.Image.Width, p.Image.Height);
+                x += p.Image.Width + pad;
+                shelf = Math.Max(shelf, p.Image.Height);
+            }
+
+            groups++;
+        }
+
+        RefreshEverything();
+        SetStatus($"Grouped {active.Count} active piece(s) into {groups} resolution-size cluster(s).");
+    }
+
+    static (int Width, int Height, int Area) ResolutionBucket(int width, int height)
+    {
+        int step = Math.Max(width, height) <= 64 ? 8 : (Math.Max(width, height) <= 256 ? 16 : 32);
+        int bucketW = RoundUp(width, step);
+        int bucketH = RoundUp(height, step);
+        return (bucketW, bucketH, bucketW * bucketH);
+    }
+
+    static int RoundUp(int value, int step) => ((Math.Max(1, value) + step - 1) / step) * step;
 
     void FitAtlas()
     {
@@ -1543,6 +1700,8 @@ public class MainForm : Form
         }
 
         FitAtlas();
+        string atlasFolder = AtlasEditingFolder();
+        Directory.CreateDirectory(atlasFolder);
 
         using var output = new Bitmap(atlasW, atlasH, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(output))
@@ -1554,7 +1713,7 @@ public class MainForm : Form
                 g.DrawImage(p.Image, p.Bounds);
         }
 
-        output.Save(Path.Combine(folder, CombinedName), ImageFormat.Png);
+        output.Save(Path.Combine(atlasFolder, CombinedName), ImageFormat.Png);
 
         var layout = new LayoutFile
         {
@@ -1580,15 +1739,18 @@ public class MainForm : Form
             }).ToList()
         };
 
-        File.WriteAllText(Path.Combine(folder, LayoutName), JsonSerializer.Serialize(layout, new JsonSerializerOptions { WriteIndented = true }));
-        MessageBox.Show("Saved combined_texture.png and n64_texture_layout.json.");
+        File.WriteAllText(Path.Combine(atlasFolder, LayoutName), JsonSerializer.Serialize(layout, new JsonSerializerOptions { WriteIndented = true }));
+        lastSelectedLayoutFolder = atlasFolder;
+        OpenFolderInExplorer(atlasFolder);
+        MessageBox.Show("Saved combined_texture.png and n64_texture_layout.json to:\n" + atlasFolder);
     }
 
     void SplitCombined()
     {
-        if (!Directory.Exists(folder))
+        string atlasFolder = AtlasEditingFolder();
+        if (!Directory.Exists(atlasFolder))
         {
-            MessageBox.Show("Choose a folder first.");
+            MessageBox.Show("Save Atlas + Layout first. It will create the AtlasEditing folder under the Paper Mario ReCut user folder.");
             return;
         }
 
@@ -1599,7 +1761,7 @@ public class MainForm : Form
             return;
         }
 
-        if (TrySplitLayoutFolder(folder, outputFolder, true, out int saved, out bool scaled))
+        if (TrySplitLayoutFolder(atlasFolder, outputFolder, false, out int saved, out bool scaled))
             MessageBox.Show($"Split complete. Saved {saved} pieces to:\n{outputFolder}\nScaled split: {scaled}");
     }
 

@@ -216,6 +216,7 @@ namespace {
     void show_info_message(const char* msg);
     std::filesystem::path app_base_path();
     std::filesystem::path app_executable_path();
+    std::filesystem::path app_config_path();
     std::filesystem::path texture_root_path();
     std::filesystem::path texture_builtin_path();
     std::filesystem::path texture_replacement_path();
@@ -238,6 +239,7 @@ namespace {
     HWND texture_dump_button = nullptr;
     HWND texture_dump_progress = nullptr;
     HWND texture_atlas_button = nullptr;
+    HWND texture_tooltip = nullptr;
     HWND graphics_options_window = nullptr;
     HWND graphics_resolution_combo = nullptr;
     HWND graphics_aspect_combo = nullptr;
@@ -277,9 +279,10 @@ namespace {
     std::chrono::steady_clock::time_point texture_dump_pass_started = std::chrono::steady_clock::now();
 
     constexpr UINT_PTR menu_command_restart = 40001;
-    constexpr UINT_PTR menu_command_save_state = 40002;
-    constexpr UINT_PTR menu_command_load_state = 40003;
     constexpr UINT_PTR menu_command_exit = 40004;
+    constexpr UINT_PTR menu_command_save_state_slot_base = 40010;
+    constexpr UINT_PTR menu_command_load_state_slot_base = 40015;
+    constexpr int save_state_slot_count = 5;
     constexpr UINT_PTR menu_command_graphics_options = 40020;
     constexpr UINT_PTR menu_command_fullscreen = 40021;
     constexpr UINT_PTR menu_command_resolution = 40022;
@@ -327,6 +330,39 @@ namespace {
     bool handle_menu_command(UINT_PTR command, HWND hwnd);
     void launch_paper_atlas_tool();
 
+    std::filesystem::path save_state_directory() {
+        std::filesystem::path directory = app_config_path() / "states";
+        std::error_code error;
+        std::filesystem::create_directories(directory, error);
+        return directory;
+    }
+
+    std::filesystem::path save_state_slot_path(int slot) {
+        return save_state_directory() / ("slot" + std::to_string(slot) + ".pmrcstate");
+    }
+
+    void save_state_slot(int slot) {
+        const recomp::SaveStateResult result = recomp::save_state_to_file(save_state_slot_path(slot));
+        if (result == recomp::SaveStateResult::Success) {
+            show_info_message(("Saved state slot " + std::to_string(slot) + ".").c_str());
+            return;
+        }
+
+        show_message(("Could not save state slot " + std::to_string(slot) + ": " +
+            recomp::save_state_result_message(result)).c_str());
+    }
+
+    void load_state_slot(int slot) {
+        const recomp::SaveStateResult result = recomp::load_state_from_file(save_state_slot_path(slot));
+        if (result == recomp::SaveStateResult::Success) {
+            show_info_message(("Loaded state slot " + std::to_string(slot) + ".").c_str());
+            return;
+        }
+
+        show_message(("Could not load state slot " + std::to_string(slot) + ": " +
+            recomp::save_state_result_message(result)).c_str());
+    }
+
     void restart_application() {
         const std::filesystem::path executable = app_executable_path();
         if (executable.empty()) {
@@ -361,15 +397,20 @@ namespace {
     }
 
     bool handle_menu_command(UINT_PTR command, HWND hwnd) {
+        if (command >= menu_command_save_state_slot_base &&
+            command < menu_command_save_state_slot_base + save_state_slot_count) {
+            save_state_slot(static_cast<int>(command - menu_command_save_state_slot_base) + 1);
+            return true;
+        }
+        if (command >= menu_command_load_state_slot_base &&
+            command < menu_command_load_state_slot_base + save_state_slot_count) {
+            load_state_slot(static_cast<int>(command - menu_command_load_state_slot_base) + 1);
+            return true;
+        }
+
         switch (command) {
         case menu_command_restart:
             restart_application();
-            return true;
-        case menu_command_save_state:
-            show_info_message("Save states are not implemented yet. This menu item is reserved for the save-state system.");
-            return true;
-        case menu_command_load_state:
-            show_info_message("Load states are not implemented yet. This menu item is reserved for the save-state system.");
             return true;
         case menu_command_exit:
             ultramodern::quit();
@@ -435,10 +476,18 @@ namespace {
         app_menu_bar = CreateMenu();
 
         HMENU file_menu = CreatePopupMenu();
+        HMENU save_state_menu = CreatePopupMenu();
+        HMENU load_state_menu = CreatePopupMenu();
+        for (int slot = 0; slot < save_state_slot_count; slot++) {
+            std::wstring label = L"Slot " + std::to_wstring(slot + 1);
+            AppendMenuW(save_state_menu, MF_STRING, menu_command_save_state_slot_base + slot, label.c_str());
+            AppendMenuW(load_state_menu, MF_STRING, menu_command_load_state_slot_base + slot, label.c_str());
+        }
+
         AppendMenuW(file_menu, MF_STRING, menu_command_restart, L"&Restart Game");
         AppendMenuW(file_menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(file_menu, MF_STRING, menu_command_save_state, L"&Save State...");
-        AppendMenuW(file_menu, MF_STRING, menu_command_load_state, L"&Load State...");
+        AppendMenuW(file_menu, MF_POPUP, reinterpret_cast<UINT_PTR>(save_state_menu), L"&Save State...");
+        AppendMenuW(file_menu, MF_POPUP, reinterpret_cast<UINT_PTR>(load_state_menu), L"&Load State...");
         AppendMenuW(file_menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(file_menu, MF_STRING, menu_command_exit, L"E&xit");
         AppendMenuW(app_menu_bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu), L"&File");
@@ -618,11 +667,70 @@ namespace {
         return app_base_path() / "PaperAtlasTool.exe";
     }
 
+    bool directory_has_png_files(const std::filesystem::path& directory) {
+        std::error_code error;
+        if (!std::filesystem::is_directory(directory, error) || error) {
+            return false;
+        }
+
+        std::filesystem::directory_iterator iterator(
+            directory,
+            std::filesystem::directory_options::skip_permission_denied,
+            error);
+        const std::filesystem::directory_iterator end;
+        while (!error && iterator != end) {
+            if (iterator->is_regular_file(error) && !error) {
+                std::string extension = iterator->path().extension().string();
+                std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+                if (extension == ".png") {
+                    return true;
+                }
+            }
+            iterator.increment(error);
+        }
+
+        return false;
+    }
+
+    void show_paper_atlas_folder_notice(bool dump_missing, bool dump_empty, bool replacements_missing) {
+        std::wstring message = L"Paper Atlas could not find everything it normally uses:\n\n";
+
+        if (dump_missing) {
+            message += L"- Dump folder was not detected:\n  " + texture_dump_path().wstring() + L"\n";
+        }
+        else if (dump_empty) {
+            message += L"- Dump folder has no PNG dumps yet:\n  " + texture_dump_path().wstring() + L"\n";
+        }
+
+        if (replacements_missing) {
+            message += L"- Replacement folder was not detected:\n  " + texture_replacement_path().wstring() + L"\n";
+        }
+
+        message +=
+            L"\nTo create/fill these folders, open Graphics > Texture Replacement, "
+            L"then press Dump Textures while the scene you want is visible. "
+            L"Paper Atlas will edit dumped PNGs and write finished pieces to the replacements folder.";
+
+        MessageBoxW(main_window, message.c_str(), L"Paper Mario ReCut", MB_OK | MB_ICONINFORMATION | MB_TASKMODAL);
+    }
+
     void launch_paper_atlas_tool() {
+        std::error_code error;
+        const bool dump_missing = !std::filesystem::is_directory(texture_dump_path(), error) || error;
+        error.clear();
+        const bool replacements_missing = !std::filesystem::is_directory(texture_replacement_path(), error) || error;
+        const bool dump_empty = !dump_missing && !directory_has_png_files(texture_dump_path());
+
+        if (dump_missing || replacements_missing || dump_empty) {
+            show_paper_atlas_folder_notice(dump_missing, dump_empty, replacements_missing);
+        }
+
         ensure_texture_folder_layout();
 
         const std::filesystem::path executable = paper_atlas_tool_path();
-        std::error_code error;
+        error.clear();
         if (!std::filesystem::is_regular_file(executable, error) || error) {
             show_message("Paper Atlas Tool was not found next to PaperMarioReCut.exe.");
             return;
@@ -630,6 +738,7 @@ namespace {
 
         std::wstring command_line =
             L"\"" + executable.wstring() + L"\""
+            L" --user \"" + app_config_path().wstring() + L"\""
             L" --source \"" + texture_dump_path().wstring() + L"\""
             L" --replacements \"" + texture_replacement_path().wstring() + L"\"";
 
@@ -2220,6 +2329,20 @@ namespace {
         }
     }
 
+    void add_tooltip(HWND tooltip, HWND parent, HWND control, const wchar_t* text) {
+        if (!tooltip || !parent || !control || text == nullptr) {
+            return;
+        }
+
+        TOOLINFOW tool{};
+        tool.cbSize = sizeof(tool);
+        tool.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+        tool.hwnd = parent;
+        tool.uId = reinterpret_cast<UINT_PTR>(control);
+        tool.lpszText = const_cast<wchar_t*>(text);
+        SendMessageW(tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
+    }
+
     LRESULT CALLBACK texture_replacement_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         switch (message) {
         case WM_CREATE: {
@@ -2238,6 +2361,21 @@ namespace {
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                 20, 56, 122, 30,
                 hwnd, reinterpret_cast<HMENU>(texture_command_dump_textures), GetModuleHandleW(nullptr), nullptr);
+
+            texture_tooltip = CreateWindowExW(
+                WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+                WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+            if (texture_tooltip) {
+                SetWindowPos(texture_tooltip, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                add_tooltip(
+                    texture_tooltip,
+                    hwnd,
+                    texture_dump_button,
+                    L"Pauses game input briefly and captures the currently loaded scene textures as PNG v5 files in user\\textures\\dumps. Move to the scene you want first, then press this.");
+            }
 
             HWND reload_button = CreateWindowExW(
                 0, L"BUTTON", L"Reload Folder",
@@ -2324,6 +2462,7 @@ namespace {
             texture_dump_button = nullptr;
             texture_dump_progress = nullptr;
             texture_atlas_button = nullptr;
+            texture_tooltip = nullptr;
             return 0;
         }
 

@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <filesystem>
+#include <string>
 
 #include "recomp.h"
 #include "rsp.hpp"
@@ -106,6 +107,21 @@ namespace recomp {
     bool eeprom_allowed();
     bool sram_allowed();
     bool flashram_allowed();
+
+    enum class SaveStateResult {
+        Success,
+        GameNotRunning,
+        MissingContext,
+        FileReadFailed,
+        FileWriteFailed,
+        InvalidFile,
+        Busy,
+    };
+
+    SaveStateResult save_state_to_file(const std::filesystem::path& path);
+    SaveStateResult load_state_from_file(const std::filesystem::path& path);
+    const char* save_state_result_message(SaveStateResult result);
+    void service_save_state(uint8_t* rdram, recomp_context* context);
 
     void start_game(const std::u8string& game_id);
     std::u8string current_game_id();

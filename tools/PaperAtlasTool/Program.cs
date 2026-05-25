@@ -36,7 +36,18 @@ internal static class Program
             };
 
             ApplicationConfiguration.Initialize();
-            Application.Run(new MainForm(ParseOption(args, "--source"), ParseOption(args, "--replacements")));
+
+            string userFolder = ResolveUserFolder(args);
+            string sourceFolder = ParseOption(args, "--source");
+            string replacementsFolder = ParseOption(args, "--replacements");
+
+            if (string.IsNullOrWhiteSpace(sourceFolder))
+                sourceFolder = Path.Combine(userFolder, "textures", "dumps");
+
+            if (string.IsNullOrWhiteSpace(replacementsFolder))
+                replacementsFolder = Path.Combine(userFolder, "textures", "replacements");
+
+            Application.Run(new MainForm(sourceFolder, replacementsFolder, userFolder));
         }
         catch (Exception ex)
         {
@@ -59,6 +70,43 @@ internal static class Program
 
             if (i + 1 < args.Length)
                 return args[i + 1];
+        }
+
+        return "";
+    }
+
+    static string ResolveUserFolder(string[] args)
+    {
+        string explicitUser = ParseOption(args, "--user");
+        if (!string.IsNullOrWhiteSpace(explicitUser))
+            return explicitUser;
+
+        string source = ParseOption(args, "--source");
+        string inferred = InferUserFolderFromTextureFolder(source);
+        if (!string.IsNullOrWhiteSpace(inferred))
+            return inferred;
+
+        string replacements = ParseOption(args, "--replacements");
+        inferred = InferUserFolderFromTextureFolder(replacements);
+        if (!string.IsNullOrWhiteSpace(inferred))
+            return inferred;
+
+        return Path.Combine(AppContext.BaseDirectory, "user");
+    }
+
+    static string InferUserFolderFromTextureFolder(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return "";
+
+        try
+        {
+            var directory = new DirectoryInfo(path);
+            if (directory.Parent?.Name.Equals("textures", StringComparison.OrdinalIgnoreCase) == true)
+                return directory.Parent.Parent?.FullName ?? "";
+        }
+        catch
+        {
         }
 
         return "";
