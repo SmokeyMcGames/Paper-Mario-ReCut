@@ -85,6 +85,7 @@ public class MainForm : Form
     readonly string startupReplacementsFolder;
     readonly ContextMenuStrip pieceMenu = new();
     Piece? contextPiece = null;
+    string lastSelectedLayoutFolder = "";
 
     readonly string settingsDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -131,6 +132,7 @@ public class MainForm : Form
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
 
         BuildUi();
+        BuildPieceMenu();
         WireEvents();
         LoadSettings();
 
@@ -369,6 +371,74 @@ public class MainForm : Form
         Controls.Add(status);
     }
 
+    void BuildPieceMenu()
+    {
+        ToolStripMenuItem Item(string text, Action action)
+        {
+            var item = new ToolStripMenuItem(text);
+            item.Click += (_, _) => action();
+            return item;
+        }
+
+        var editItem = Item("Edit With Selected Image Editor", EditContextPiece);
+        var reloadItem = Item("Reload Selected PNG From Disk", ReloadContextPiece);
+        var copyItem = Item("Copy PNG To Replacements Folder", CopyContextPieceToReplacements);
+        var editLayoutItem = Item("Edit Selected Pieces As Combined Layout", EditSelectedPiecesAsCombinedLayout);
+        var splitLayoutItem = Item("Split Last Selected Layout To Replacements", SplitLastSelectedLayoutToReplacements);
+        var removeItem = Item("Remove Selected Pieces", RemoveSelected);
+        var lockItem = Item("Lock Selected Pieces", () =>
+        {
+            PushUndo();
+            foreach (var p in ContextSelection())
+                p.Locked = true;
+            RefreshEverything();
+        });
+        var unlockItem = Item("Unlock Selected Pieces", () =>
+        {
+            PushUndo();
+            foreach (var p in ContextSelection())
+                p.Locked = false;
+            RefreshEverything();
+        });
+
+        pieceMenu.Items.AddRange(new ToolStripItem[]
+        {
+            editItem,
+            reloadItem,
+            copyItem,
+            new ToolStripSeparator(),
+            editLayoutItem,
+            splitLayoutItem,
+            new ToolStripSeparator(),
+            removeItem,
+            lockItem,
+            unlockItem
+        });
+
+        pieceMenu.Opening += (_, e) =>
+        {
+            var selection = ContextSelection();
+            bool hasSelection = selection.Count > 0;
+            bool hasLastLayout = HasLastSelectedLayout();
+
+            editItem.Enabled = hasSelection;
+            reloadItem.Enabled = hasSelection;
+            copyItem.Enabled = hasSelection;
+            editLayoutItem.Enabled = hasSelection;
+            removeItem.Enabled = hasSelection;
+            lockItem.Enabled = hasSelection;
+            unlockItem.Enabled = hasSelection;
+            splitLayoutItem.Enabled = hasLastLayout;
+
+            editLayoutItem.Text = selection.Count == 1
+                ? "Edit Selected Piece As Combined Layout"
+                : $"Edit {selection.Count} Selected Pieces As Combined Layout";
+
+            if (!hasSelection && !hasLastLayout)
+                e.Cancel = true;
+        };
+    }
+
     void WireEvents()
     {
         canvas.Paint += PaintCanvas;
@@ -402,11 +472,16 @@ public class MainForm : Form
 
             if (index >= 0 && index < active.Count)
             {
-                list.SelectedIndex = index;
                 contextPiece = active[index];
-                selected.Clear();
-                selected.Add(contextPiece);
-                RefreshList();
+
+                if (!selected.Contains(contextPiece))
+                {
+                    list.SelectedIndex = index;
+                    selected.Clear();
+                    selected.Add(contextPiece);
+                    RefreshList();
+                }
+
                 pieceMenu.Show(list, e.Location);
             }
         };
@@ -565,9 +640,41 @@ public class MainForm : Form
         return folder;
     }
 
+    List<Piece> ContextSelection()
+    {
+        var active = Active().ToHashSet();
+        var result = selected
+            .Where(active.Contains)
+            .OrderBy(p => pieces.IndexOf(p))
+            .ToList();
+
+        if (result.Count == 0 && contextPiece != null && active.Contains(contextPiece))
+            result.Add(contextPiece);
+
+        return result;
+    }
+
+    bool HasLastSelectedLayout()
+    {
+        return !string.IsNullOrWhiteSpace(lastSelectedLayoutFolder)
+            && File.Exists(Path.Combine(lastSelectedLayoutFolder, CombinedName))
+            && File.Exists(Path.Combine(lastSelectedLayoutFolder, LayoutName));
+    }
+
+    bool EnsureImageEditor()
+    {
+        if (!string.IsNullOrWhiteSpace(imageEditorPath) && File.Exists(imageEditorPath))
+            return true;
+
+        MessageBox.Show("No saved image editor found. Choose one now.");
+        ChooseImageEditor();
+
+        return !string.IsNullOrWhiteSpace(imageEditorPath) && File.Exists(imageEditorPath);
+    }
+
     void CopyContextPieceToReplacements()
     {
-        var piece = contextPiece ?? selected.FirstOrDefault();
+        var piece = ContextSelection().FirstOrDefault();
 
         if (piece == null)
         {
@@ -617,7 +724,7 @@ public class MainForm : Form
 
     void EditContextPiece()
     {
-        var piece = contextPiece ?? selected.FirstOrDefault();
+        var piece = ContextSelection().FirstOrDefault();
 
         if (piece == null)
         {
@@ -625,14 +732,8 @@ public class MainForm : Form
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(imageEditorPath) || !File.Exists(imageEditorPath))
-        {
-            MessageBox.Show("No saved image editor found. Choose one now.");
-            ChooseImageEditor();
-
-            if (string.IsNullOrWhiteSpace(imageEditorPath) || !File.Exists(imageEditorPath))
-                return;
-        }
+        if (!EnsureImageEditor())
+            return;
 
         try
         {
@@ -651,9 +752,113 @@ public class MainForm : Form
         }
     }
 
+    void EditSelectedPiecesAsCombinedLayout()
+    {
+        var selection = ContextSelection();
+        if (selection.Count == 0)
+        {
+            MessageBox.Show("Select one or more PNG pieces first.");
+            return;
+        }
+
+        if (!EnsureImageEditor())
+            return;
+
+        try
+        {
+            var ordered = Active().Where(selection.Contains).ToList();
+            var bounds = Union(ordered.Select(p => p.Bounds));
+            int atlasWidth = Math.Max(1, bounds.Width);
+            int atlasHeight = Math.Max(1, bounds.Height);
+
+            string root = Path.Combine(Path.GetTempPath(), "PaperAtlasTool", "SelectedLayouts");
+            string outputFolder = Path.Combine(root, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"));
+            Directory.CreateDirectory(outputFolder);
+
+            string combinedPath = Path.Combine(outputFolder, CombinedName);
+            string layoutPath = Path.Combine(outputFolder, LayoutName);
+
+            using (var output = new Bitmap(atlasWidth, atlasHeight, PixelFormat.Format32bppArgb))
+            using (var g = Graphics.FromImage(output))
+            {
+                g.Clear(Color.Transparent);
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+
+                foreach (var piece in ordered)
+                {
+                    var rect = piece.Bounds;
+                    rect.Offset(-bounds.Left, -bounds.Top);
+                    g.DrawImage(piece.Image, rect);
+                }
+
+                output.Save(combinedPath, ImageFormat.Png);
+            }
+
+            var layout = new LayoutFile
+            {
+                atlas_width = atlasWidth,
+                atlas_height = atlasHeight,
+                pieces = ordered.Select((piece, index) =>
+                {
+                    var rect = piece.Bounds;
+                    rect.Offset(-bounds.Left, -bounds.Top);
+
+                    return new LayoutPiece
+                    {
+                        filename = piece.FileName,
+                        x = rect.X,
+                        y = rect.Y,
+                        width = rect.Width,
+                        height = rect.Height,
+                        order = index,
+                        included = true
+                    };
+                }).ToList()
+            };
+
+            File.WriteAllText(layoutPath, JsonSerializer.Serialize(layout, new JsonSerializerOptions { WriteIndented = true }));
+            lastSelectedLayoutFolder = outputFolder;
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = imageEditorPath,
+                Arguments = $"\"{combinedPath}\"",
+                UseShellExecute = true
+            });
+
+            SetStatus($"Opened selected-piece atlas with {ordered.Count} piece(s). Save it, then right-click and split last selected layout.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Could not create selected-piece atlas:\n" + ex.Message);
+        }
+    }
+
+    void SplitLastSelectedLayoutToReplacements()
+    {
+        if (!HasLastSelectedLayout())
+        {
+            MessageBox.Show("No selected-piece layout has been created yet.");
+            return;
+        }
+
+        string outputFolder = GetOutputFolder(true);
+        if (string.IsNullOrWhiteSpace(outputFolder) || !Directory.Exists(outputFolder))
+        {
+            MessageBox.Show("Choose a valid replacements/output folder.");
+            return;
+        }
+
+        if (TrySplitLayoutFolder(lastSelectedLayoutFolder, outputFolder, false, out int saved, out bool scaled))
+        {
+            SetStatus($"Split selected-piece layout to replacements: {saved} piece(s).");
+            MessageBox.Show($"Split selected layout complete. Saved {saved} pieces to:\n{outputFolder}\nScaled split: {scaled}");
+        }
+    }
+
     void ReloadContextPiece()
     {
-        var piece = contextPiece ?? selected.FirstOrDefault();
+        var piece = ContextSelection().FirstOrDefault();
 
         if (piece == null)
         {
@@ -717,6 +922,8 @@ public class MainForm : Form
 
         pieces.Clear();
         selected.Clear();
+        contextPiece = null;
+        lastSelectedLayoutFolder = "";
         undo.Clear();
         redo.Clear();
         dragStart.Clear();
@@ -750,6 +957,8 @@ public class MainForm : Form
 
         pieces.Clear();
         selected.Clear();
+        contextPiece = null;
+        lastSelectedLayoutFolder = "";
         undo.Clear();
         redo.Clear();
         dragStart.Clear();
@@ -1383,23 +1592,6 @@ public class MainForm : Form
             return;
         }
 
-        string combinedPath = Path.Combine(folder, CombinedName);
-        string layoutPath = Path.Combine(folder, LayoutName);
-
-        if (!File.Exists(combinedPath) || !File.Exists(layoutPath))
-        {
-            MessageBox.Show("Missing combined_texture.png or n64_texture_layout.json.");
-            return;
-        }
-
-        var layout = JsonSerializer.Deserialize<LayoutFile>(File.ReadAllText(layoutPath));
-        if (layout == null) return;
-
-        using var combined = new Bitmap(combinedPath);
-        double sx = combined.Width / (double)Math.Max(1, layout.atlas_width);
-        double sy = combined.Height / (double)Math.Max(1, layout.atlas_height);
-        bool scaled = scaledSplitCheck.Checked && (Math.Abs(sx - 1) > 0.0001 || Math.Abs(sy - 1) > 0.0001);
-
         string outputFolder = GetOutputFolder(true);
         if (string.IsNullOrWhiteSpace(outputFolder) || !Directory.Exists(outputFolder))
         {
@@ -1407,18 +1599,47 @@ public class MainForm : Form
             return;
         }
 
-        string backup = Path.Combine(folder, "OriginalPiecesBackup");
-        Directory.CreateDirectory(backup);
+        if (TrySplitLayoutFolder(folder, outputFolder, true, out int saved, out bool scaled))
+            MessageBox.Show($"Split complete. Saved {saved} pieces to:\n{outputFolder}\nScaled split: {scaled}");
+    }
 
-        int saved = 0;
+    bool TrySplitLayoutFolder(string sourceFolder, string outputFolder, bool backupOriginals, out int saved, out bool scaled)
+    {
+        saved = 0;
+        scaled = false;
+
+        string combinedPath = Path.Combine(sourceFolder, CombinedName);
+        string layoutPath = Path.Combine(sourceFolder, LayoutName);
+
+        if (!File.Exists(combinedPath) || !File.Exists(layoutPath))
+        {
+            MessageBox.Show("Missing combined_texture.png or n64_texture_layout.json.");
+            return false;
+        }
+
+        var layout = JsonSerializer.Deserialize<LayoutFile>(File.ReadAllText(layoutPath));
+        if (layout == null)
+            return false;
+
+        using var combined = new Bitmap(combinedPath);
+        double sx = combined.Width / (double)Math.Max(1, layout.atlas_width);
+        double sy = combined.Height / (double)Math.Max(1, layout.atlas_height);
+        scaled = scaledSplitCheck.Checked && (Math.Abs(sx - 1) > 0.0001 || Math.Abs(sy - 1) > 0.0001);
+
+        string backup = Path.Combine(sourceFolder, "OriginalPiecesBackup");
+        if (backupOriginals)
+            Directory.CreateDirectory(backup);
 
         foreach (var p in layout.pieces.Where(p => p.included))
         {
-            string original = Path.Combine(folder, p.filename);
-            if (File.Exists(original))
+            if (backupOriginals)
             {
-                string b = Path.Combine(backup, p.filename);
-                if (!File.Exists(b)) File.Copy(original, b);
+                string original = Path.Combine(sourceFolder, p.filename);
+                if (File.Exists(original))
+                {
+                    string b = Path.Combine(backup, p.filename);
+                    if (!File.Exists(b)) File.Copy(original, b);
+                }
             }
 
             int x = scaled ? (int)Math.Round(p.x * sx) : p.x;
@@ -1434,7 +1655,7 @@ public class MainForm : Form
             saved++;
         }
 
-        MessageBox.Show($"Split complete. Saved {saved} pieces to:\n{outputFolder}\nScaled split: {scaled}");
+        return true;
     }
 
     void SetStatus(string text) => status.Text = text;
