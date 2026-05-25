@@ -237,7 +237,6 @@ namespace {
     HWND texture_live_replacement_checkbox = nullptr;
     HWND texture_dump_button = nullptr;
     HWND texture_dump_progress = nullptr;
-    HWND texture_status_label = nullptr;
     HWND graphics_options_window = nullptr;
     HWND graphics_resolution_combo = nullptr;
     HWND graphics_aspect_combo = nullptr;
@@ -262,10 +261,6 @@ namespace {
     HWND input_keyboard_page = nullptr;
     HWND input_controller_combo = nullptr;
     HWND input_profile_label = nullptr;
-    HWND input_gamepad_action_combo = nullptr;
-    HWND input_gamepad_binding_combo = nullptr;
-    HWND input_keyboard_action_combo = nullptr;
-    HWND input_keyboard_binding_combo = nullptr;
     HWND input_mouse_checkbox = nullptr;
     HWND gamepad_rebind_window = nullptr;
     std::array<HWND, input_action_count> gamepad_rebind_combos{};
@@ -299,8 +294,6 @@ namespace {
     constexpr UINT_PTR input_command_apply = 40500;
     constexpr UINT_PTR input_command_close = 40501;
     constexpr UINT_PTR input_command_apply_profile = 40502;
-    constexpr UINT_PTR input_command_stage_gamepad_binding = 40503;
-    constexpr UINT_PTR input_command_stage_keyboard_binding = 40504;
     constexpr UINT_PTR input_command_open_gamepad_rebind = 40505;
     constexpr UINT_PTR gamepad_rebind_command_apply = 40600;
     constexpr UINT_PTR gamepad_rebind_command_close = 40601;
@@ -481,44 +474,7 @@ namespace {
         app_menu_bar_visible = false;
     }
 
-    bool is_texture_png_file(const std::filesystem::path& path) {
-        std::string extension = path.extension().string();
-        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
-        return extension == ".png";
-    }
-
-    size_t count_dumped_texture_pngs() {
-        std::error_code error;
-        const std::filesystem::path directory = texture_dump_path();
-        if (!std::filesystem::is_directory(directory, error) || error) {
-            return 0;
-        }
-
-        size_t count = 0;
-        std::filesystem::recursive_directory_iterator iterator(
-            directory,
-            std::filesystem::directory_options::skip_permission_denied,
-            error);
-        const std::filesystem::recursive_directory_iterator end;
-        while (!error && iterator != end) {
-            if (iterator->is_regular_file(error) && !error && is_texture_png_file(iterator->path())) {
-                count++;
-            }
-            iterator.increment(error);
-        }
-
-        return count;
-    }
-
-    void set_texture_status_text(const wchar_t* text) {
-        if (texture_status_label) {
-            SetWindowTextW(texture_status_label, text);
-        }
-    }
-
-    void stop_texture_dump_pass(const wchar_t* status_text) {
+    void stop_texture_dump_pass() {
         if (!texture_dump_pass_active) {
             return;
         }
@@ -538,8 +494,6 @@ namespace {
         if (texture_replacement_window) {
             KillTimer(texture_replacement_window, texture_dump_timer);
         }
-
-        set_texture_status_text(status_text);
     }
 
     void start_texture_dump_pass() {
@@ -569,8 +523,6 @@ namespace {
         if (texture_replacement_window) {
             SetTimer(texture_replacement_window, texture_dump_timer, 100, nullptr);
         }
-
-        set_texture_status_text(L"Dumping current scene textures...");
     }
 
     void update_texture_dump_progress() {
@@ -585,13 +537,8 @@ namespace {
             SendMessageW(texture_dump_progress, PBM_SETPOS, percent, 0);
         }
 
-        wchar_t status[160] = {};
-        const size_t dumped_count = count_dumped_texture_pngs();
-        swprintf_s(status, L"Dumping current scene textures... %d%% (%zu PNGs)", percent, dumped_count);
-        set_texture_status_text(status);
-
         if (elapsed >= texture_dump_pass_seconds) {
-            stop_texture_dump_pass(L"Dump pass complete. Copy PNGs from dumps to replacements to edit.");
+            stop_texture_dump_pass();
         }
     }
 
@@ -663,21 +610,6 @@ namespace {
                 texture_live_replacement_enabled ? BST_CHECKED : BST_UNCHECKED);
         }
 
-        if (texture_status_label) {
-            if (texture_dump_pass_active) {
-                return;
-            }
-
-            const bool loaded = ultramodern::is_texture_replacement_loaded();
-            const wchar_t* status = L"Built-in ReCut textures active. Live replacements off.";
-            if (texture_live_replacement_enabled && loaded) {
-                status = L"Live replacement on. Watching replacements folder.";
-            }
-            else if (texture_live_replacement_enabled) {
-                status = L"Live replacement starting.";
-            }
-            SetWindowTextW(texture_status_label, status);
-        }
     }
 
     struct ResolutionChoice {
@@ -694,7 +626,6 @@ namespace {
     std::vector<ResolutionChoice> graphics_resolution_choices;
     std::vector<int> input_controller_choices;
     std::vector<GamepadBinding> gamepad_binding_choices;
-    std::vector<SDL_Scancode> keyboard_binding_choices;
 
     const std::array<ComboIntChoice, 5> anisotropic_choices{ {
         { L"Off", 1 },
@@ -1420,42 +1351,9 @@ namespace {
         }
     }
 
-    void build_keyboard_binding_choices() {
-        keyboard_binding_choices = {
-            SDL_SCANCODE_A, SDL_SCANCODE_B, SDL_SCANCODE_C, SDL_SCANCODE_D,
-            SDL_SCANCODE_E, SDL_SCANCODE_F, SDL_SCANCODE_G, SDL_SCANCODE_H,
-            SDL_SCANCODE_I, SDL_SCANCODE_J, SDL_SCANCODE_K, SDL_SCANCODE_L,
-            SDL_SCANCODE_M, SDL_SCANCODE_N, SDL_SCANCODE_O, SDL_SCANCODE_P,
-            SDL_SCANCODE_Q, SDL_SCANCODE_R, SDL_SCANCODE_S, SDL_SCANCODE_T,
-            SDL_SCANCODE_U, SDL_SCANCODE_V, SDL_SCANCODE_W, SDL_SCANCODE_X,
-            SDL_SCANCODE_Y, SDL_SCANCODE_Z,
-            SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4,
-            SDL_SCANCODE_5, SDL_SCANCODE_6, SDL_SCANCODE_7, SDL_SCANCODE_8,
-            SDL_SCANCODE_9, SDL_SCANCODE_0,
-            SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT,
-            SDL_SCANCODE_SPACE, SDL_SCANCODE_RETURN, SDL_SCANCODE_TAB,
-            SDL_SCANCODE_LSHIFT, SDL_SCANCODE_RSHIFT,
-            SDL_SCANCODE_LCTRL, SDL_SCANCODE_RCTRL,
-            SDL_SCANCODE_LALT, SDL_SCANCODE_RALT,
-            SDL_SCANCODE_COMMA, SDL_SCANCODE_PERIOD, SDL_SCANCODE_SLASH,
-            SDL_SCANCODE_SEMICOLON, SDL_SCANCODE_APOSTROPHE,
-            SDL_SCANCODE_LEFTBRACKET, SDL_SCANCODE_RIGHTBRACKET,
-            SDL_SCANCODE_MINUS, SDL_SCANCODE_EQUALS
-        };
-    }
-
     int find_gamepad_binding_index(const GamepadBinding& binding) {
         for (size_t i = 0; i < gamepad_binding_choices.size(); i++) {
             if (gamepad_binding_choices[i].kind == binding.kind && gamepad_binding_choices[i].code == binding.code) {
-                return static_cast<int>(i);
-            }
-        }
-        return 0;
-    }
-
-    int find_keyboard_binding_index(SDL_Scancode scancode) {
-        for (size_t i = 0; i < keyboard_binding_choices.size(); i++) {
-            if (keyboard_binding_choices[i] == scancode) {
                 return static_cast<int>(i);
             }
         }
@@ -1498,23 +1396,8 @@ namespace {
         }
     }
 
-    void sync_input_gamepad_binding_combo() {
-        const int action_index = combo_selection(input_gamepad_action_combo);
-        if (action_index >= 0 && action_index < input_action_count) {
-            combo_select_clamped(input_gamepad_binding_combo, find_gamepad_binding_index(input_window_pending_settings.gamepad_bindings[action_index]));
-        }
-    }
-
-    void sync_input_keyboard_binding_combo() {
-        const int action_index = combo_selection(input_keyboard_action_combo);
-        if (action_index >= 0 && action_index < input_action_count) {
-            combo_select_clamped(input_keyboard_binding_combo, find_keyboard_binding_index(input_window_pending_settings.keyboard_bindings[action_index]));
-        }
-    }
-
     void fill_input_options_controls() {
-        if (!input_options_window || !input_controller_combo || !input_gamepad_action_combo ||
-            !input_gamepad_binding_combo || !input_keyboard_action_combo || !input_keyboard_binding_combo) {
+        if (!input_options_window || !input_controller_combo) {
             return;
         }
 
@@ -1523,9 +1406,6 @@ namespace {
             input_window_pending_settings = input_settings;
         }
         input_window_pending_valid = true;
-
-        build_gamepad_binding_choices();
-        build_keyboard_binding_choices();
 
         input_controller_choices.clear();
         SendMessageW(input_controller_combo, CB_RESETCONTENT, 0, 0);
@@ -1552,28 +1432,6 @@ namespace {
         combo_select_clamped(input_controller_combo, preferred_selection);
         update_input_profile_label();
 
-        SendMessageW(input_gamepad_action_combo, CB_RESETCONTENT, 0, 0);
-        SendMessageW(input_keyboard_action_combo, CB_RESETCONTENT, 0, 0);
-        for (const InputActionDescriptor& action : input_actions) {
-            combo_add(input_gamepad_action_combo, action.label);
-            combo_add(input_keyboard_action_combo, action.label);
-        }
-        combo_select_clamped(input_gamepad_action_combo, 0);
-        combo_select_clamped(input_keyboard_action_combo, 0);
-
-        SendMessageW(input_gamepad_binding_combo, CB_RESETCONTENT, 0, 0);
-        for (const GamepadBinding& binding : gamepad_binding_choices) {
-            const std::wstring label = gamepad_binding_label(binding);
-            combo_add(input_gamepad_binding_combo, label.c_str());
-        }
-        sync_input_gamepad_binding_combo();
-
-        SendMessageW(input_keyboard_binding_combo, CB_RESETCONTENT, 0, 0);
-        for (SDL_Scancode scancode : keyboard_binding_choices) {
-            const std::wstring label = utf8_to_wide(SDL_GetScancodeName(scancode));
-            combo_add(input_keyboard_binding_combo, label.empty() ? L"Unknown" : label.c_str());
-        }
-        sync_input_keyboard_binding_combo();
         CheckDlgButton(input_options_window, static_cast<int>(input_command_apply + 20), input_window_pending_settings.mouse_click_to_move ? BST_CHECKED : BST_UNCHECKED);
     }
 
@@ -1582,27 +1440,8 @@ namespace {
         ShowWindow(input_keyboard_page, page_index == 1 ? SW_SHOW : SW_HIDE);
     }
 
-    void stage_gamepad_binding() {
-        const int action_index = combo_selection(input_gamepad_action_combo);
-        const int binding_index = combo_selection(input_gamepad_binding_combo);
-        if (action_index >= 0 && action_index < input_action_count &&
-            binding_index >= 0 && binding_index < static_cast<int>(gamepad_binding_choices.size())) {
-            input_window_pending_settings.gamepad_bindings[action_index] = gamepad_binding_choices[binding_index];
-        }
-    }
-
-    void stage_keyboard_binding() {
-        const int action_index = combo_selection(input_keyboard_action_combo);
-        const int binding_index = combo_selection(input_keyboard_binding_combo);
-        if (action_index >= 0 && action_index < input_action_count &&
-            binding_index >= 0 && binding_index < static_cast<int>(keyboard_binding_choices.size())) {
-            input_window_pending_settings.keyboard_bindings[action_index] = keyboard_binding_choices[binding_index];
-        }
-    }
-
     void apply_automatic_gamepad_profile() {
         input_window_pending_settings.gamepad_bindings = make_default_input_settings().gamepad_bindings;
-        sync_input_gamepad_binding_combo();
         fill_gamepad_rebind_controls();
     }
 
@@ -1611,8 +1450,6 @@ namespace {
             return;
         }
 
-        stage_gamepad_binding();
-        stage_keyboard_binding();
         input_window_pending_settings.mouse_click_to_move =
             IsDlgButtonChecked(input_options_window, static_cast<int>(input_command_apply + 20)) == BST_CHECKED;
 
@@ -1724,9 +1561,6 @@ namespace {
         }
         save_recut_settings();
 
-        if (input_options_window) {
-            sync_input_gamepad_binding_combo();
-        }
     }
 
     void draw_controller_shape(HDC dc) {
@@ -1873,11 +1707,11 @@ namespace {
             TCITEMW gamepad_tab{};
             gamepad_tab.mask = TCIF_TEXT;
             gamepad_tab.pszText = const_cast<wchar_t*>(L"Gamepad");
-            TabCtrl_InsertItem(input_tab_control, 0, &gamepad_tab);
+            SendMessageW(input_tab_control, TCM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&gamepad_tab));
             TCITEMW keyboard_tab{};
             keyboard_tab.mask = TCIF_TEXT;
             keyboard_tab.pszText = const_cast<wchar_t*>(L"Keyboard");
-            TabCtrl_InsertItem(input_tab_control, 1, &keyboard_tab);
+            SendMessageW(input_tab_control, TCM_INSERTITEMW, 1, reinterpret_cast<LPARAM>(&keyboard_tab));
             SendMessageW(input_tab_control, TCM_SETITEMSIZE, 0, MAKELPARAM(126, 28));
 
             input_gamepad_page = CreateWindowExW(0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE, 24, 44, 476, 248, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -1887,19 +1721,9 @@ namespace {
             input_controller_combo = create_combo(input_gamepad_page, input_command_apply + 1, 128, 0, 310);
             input_profile_label = create_label(input_gamepad_page, L"Automatic profile: SDL Gamepad", 128, 36, 310);
             create_button(input_gamepad_page, L"Apply Automatic Profile", input_command_apply_profile, 128, 64, 180);
-            create_button(input_gamepad_page, L"Rebind...", input_command_open_gamepad_rebind, 318, 64, 120);
-            create_label(input_gamepad_page, L"Action", 0, 118, 110);
-            input_gamepad_action_combo = create_combo(input_gamepad_page, input_command_apply + 2, 128, 114, 170);
-            create_label(input_gamepad_page, L"Binding", 0, 154, 110);
-            input_gamepad_binding_combo = create_combo(input_gamepad_page, input_command_apply + 3, 128, 150, 170);
-            create_button(input_gamepad_page, L"Set Binding", input_command_stage_gamepad_binding, 312, 148, 126);
+            create_button(input_gamepad_page, L"Rebind", input_command_open_gamepad_rebind, 318, 64, 120);
 
-            create_label(input_keyboard_page, L"Action", 0, 14, 110);
-            input_keyboard_action_combo = create_combo(input_keyboard_page, input_command_apply + 4, 128, 10, 170);
-            create_label(input_keyboard_page, L"Key", 0, 50, 110);
-            input_keyboard_binding_combo = create_combo(input_keyboard_page, input_command_apply + 5, 128, 46, 170);
-            create_button(input_keyboard_page, L"Set Binding", input_command_stage_keyboard_binding, 312, 44, 126);
-            input_mouse_checkbox = create_checkbox(input_keyboard_page, L"Mouse Click-To-Move", input_command_apply + 20, 128, 92, 220);
+            input_mouse_checkbox = create_checkbox(input_keyboard_page, L"Mouse Click-To-Move", input_command_apply + 20, 0, 14, 220);
 
             create_button(hwnd, L"Apply", input_command_apply, 326, 318, 88);
             create_button(hwnd, L"Close", input_command_close, 424, 318, 88);
@@ -1934,23 +1758,9 @@ namespace {
             case input_command_open_gamepad_rebind:
                 show_gamepad_rebind_window();
                 return 0;
-            case input_command_stage_gamepad_binding:
-                stage_gamepad_binding();
-                return 0;
-            case input_command_stage_keyboard_binding:
-                stage_keyboard_binding();
-                return 0;
             default:
                 if (reinterpret_cast<HWND>(lparam) == input_controller_combo && HIWORD(wparam) == CBN_SELCHANGE) {
                     update_input_profile_label();
-                    return 0;
-                }
-                if (reinterpret_cast<HWND>(lparam) == input_gamepad_action_combo && HIWORD(wparam) == CBN_SELCHANGE) {
-                    sync_input_gamepad_binding_combo();
-                    return 0;
-                }
-                if (reinterpret_cast<HWND>(lparam) == input_keyboard_action_combo && HIWORD(wparam) == CBN_SELCHANGE) {
-                    sync_input_keyboard_binding_combo();
                     return 0;
                 }
                 break;
@@ -1966,10 +1776,6 @@ namespace {
             input_keyboard_page = nullptr;
             input_controller_combo = nullptr;
             input_profile_label = nullptr;
-            input_gamepad_action_combo = nullptr;
-            input_gamepad_binding_combo = nullptr;
-            input_keyboard_action_combo = nullptr;
-            input_keyboard_binding_combo = nullptr;
             input_mouse_checkbox = nullptr;
             input_window_pending_valid = false;
             return 0;
@@ -2065,12 +1871,6 @@ namespace {
                 20, 98, 368, 18,
                 hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
 
-            texture_status_label = CreateWindowExW(
-                0, L"STATIC", L"Built-in ReCut textures active. Live replacements off.",
-                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
-                20, 122, 380, 38,
-                hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
-
             SetWindowTheme(texture_live_replacement_checkbox, L"Explorer", nullptr);
             SetWindowTheme(texture_dump_button, L"Explorer", nullptr);
             SetWindowTheme(reload_button, L"Explorer", nullptr);
@@ -2080,7 +1880,6 @@ namespace {
             SendMessageW(texture_dump_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(reload_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(open_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-            SendMessageW(texture_status_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(texture_dump_progress, PBM_SETRANGE32, 0, 100);
             ShowWindow(texture_dump_progress, texture_dump_pass_active ? SW_SHOW : SW_HIDE);
             refresh_texture_replacement_window();
@@ -2127,7 +1926,6 @@ namespace {
             texture_live_replacement_checkbox = nullptr;
             texture_dump_button = nullptr;
             texture_dump_progress = nullptr;
-            texture_status_label = nullptr;
             return 0;
         }
 
@@ -2156,7 +1954,7 @@ namespace {
             RECT owner_rect{};
             GetWindowRect(main_window, &owner_rect);
             constexpr int dialog_width = 420;
-            constexpr int dialog_height = 210;
+            constexpr int dialog_height = 170;
             const int owner_width = static_cast<int>(owner_rect.right - owner_rect.left);
             const int owner_height = static_cast<int>(owner_rect.bottom - owner_rect.top);
             const int x = static_cast<int>(owner_rect.left) + std::max(0, (owner_width - dialog_width) / 2);
@@ -2187,7 +1985,6 @@ namespace {
         texture_live_replacement_checkbox = nullptr;
         texture_dump_button = nullptr;
         texture_dump_progress = nullptr;
-        texture_status_label = nullptr;
     }
 
 #endif
