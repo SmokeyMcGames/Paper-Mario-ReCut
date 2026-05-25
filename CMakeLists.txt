@@ -111,6 +111,25 @@ if (WIN32)
             "${PAPER_RECOMP_LIB_DIR}/rt64/src/contrib/dxc/bin/x64/dxil.dll"
             "${PAPER_RECOMP_LIB_DIR}/rt64/src/contrib/dxc/bin/x64/dxcompiler.dll"
             $<TARGET_FILE_DIR:PaperMarioReCut>)
+    find_program(DOTNET_EXECUTABLE dotnet)
+    if (DOTNET_EXECUTABLE)
+        add_custom_command(TARGET PaperMarioReCut POST_BUILD
+            COMMAND "${DOTNET_EXECUTABLE}" publish
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/PaperAtlasTool/N64TextureAtlasEditor.csproj"
+                --configuration Release
+                --runtime win-x64
+                --self-contained true
+                -p:PublishSingleFile=true
+                -p:EnableCompressionInSingleFile=true
+                -p:IncludeNativeLibrariesForSelfExtract=true
+                -p:DebugSymbols=false
+                -p:DebugType=none
+                -p:PublishReadyToRun=false
+                --output $<TARGET_FILE_DIR:PaperMarioReCut>
+            COMMENT "Publishing Paper Atlas Tool sidecar")
+    else()
+        message(WARNING "dotnet was not found. PaperAtlasTool.exe will not be built beside PaperMarioReCut.exe.")
+    endif()
 endif()
 
 target_link_libraries(PaperMarioReCut PRIVATE

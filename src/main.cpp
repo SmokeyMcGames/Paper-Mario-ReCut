@@ -237,6 +237,7 @@ namespace {
     HWND texture_live_replacement_checkbox = nullptr;
     HWND texture_dump_button = nullptr;
     HWND texture_dump_progress = nullptr;
+    HWND texture_atlas_button = nullptr;
     HWND graphics_options_window = nullptr;
     HWND graphics_resolution_combo = nullptr;
     HWND graphics_aspect_combo = nullptr;
@@ -283,6 +284,7 @@ namespace {
     constexpr UINT_PTR menu_command_fullscreen = 40021;
     constexpr UINT_PTR menu_command_resolution = 40022;
     constexpr UINT_PTR menu_command_texture_replacement = 40023;
+    constexpr UINT_PTR menu_command_paper_atlas_tool = 40024;
     constexpr UINT_PTR menu_command_controller_setup = 40040;
     constexpr UINT_PTR menu_command_rebind_keys = 40041;
     constexpr UINT_PTR menu_command_input_profiles = 40042;
@@ -291,6 +293,7 @@ namespace {
     constexpr UINT_PTR texture_command_reload = 40101;
     constexpr UINT_PTR texture_command_open_folder = 40102;
     constexpr UINT_PTR texture_command_dump_textures = 40103;
+    constexpr UINT_PTR texture_command_open_atlas_tool = 40104;
     constexpr UINT_PTR texture_dump_timer = 40200;
     constexpr UINT_PTR graphics_command_apply = 40300;
     constexpr UINT_PTR graphics_command_close = 40301;
@@ -322,6 +325,7 @@ namespace {
     void refresh_texture_replacement_window();
     void update_texture_dump_progress();
     bool handle_menu_command(UINT_PTR command, HWND hwnd);
+    void launch_paper_atlas_tool();
 
     void restart_application() {
         const std::filesystem::path executable = app_executable_path();
@@ -383,6 +387,9 @@ namespace {
         case menu_command_texture_replacement:
             show_texture_replacement_window();
             return true;
+        case menu_command_paper_atlas_tool:
+            launch_paper_atlas_tool();
+            return true;
         case menu_command_controller_setup:
             show_input_options_window();
             return true;
@@ -440,6 +447,7 @@ namespace {
         AppendMenuW(graphics_menu, MF_STRING, menu_command_graphics_options, L"&Graphics Options...");
         AppendMenuW(graphics_menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(graphics_menu, MF_STRING, menu_command_texture_replacement, L"&Texture Replacement...");
+        AppendMenuW(graphics_menu, MF_STRING, menu_command_paper_atlas_tool, L"&Paper Atlas Tool...");
         AppendMenuW(app_menu_bar, MF_POPUP, reinterpret_cast<UINT_PTR>(graphics_menu), L"&Graphics");
 
         HMENU audio_menu = CreatePopupMenu();
@@ -604,6 +612,47 @@ namespace {
             CloseHandle(process_info.hThread);
             CloseHandle(process_info.hProcess);
         }
+    }
+
+    std::filesystem::path paper_atlas_tool_path() {
+        return app_base_path() / "PaperAtlasTool.exe";
+    }
+
+    void launch_paper_atlas_tool() {
+        ensure_texture_folder_layout();
+
+        const std::filesystem::path executable = paper_atlas_tool_path();
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(executable, error) || error) {
+            show_message("Paper Atlas Tool was not found next to PaperMarioReCut.exe.");
+            return;
+        }
+
+        std::wstring command_line =
+            L"\"" + executable.wstring() + L"\""
+            L" --source \"" + texture_dump_path().wstring() + L"\""
+            L" --replacements \"" + texture_replacement_path().wstring() + L"\"";
+
+        STARTUPINFOW startup_info{};
+        startup_info.cb = sizeof(startup_info);
+        PROCESS_INFORMATION process_info{};
+        if (!CreateProcessW(
+                executable.c_str(),
+                command_line.data(),
+                nullptr,
+                nullptr,
+                FALSE,
+                0,
+                nullptr,
+                app_base_path().c_str(),
+                &startup_info,
+                &process_info)) {
+            show_message("Paper Mario ReCut could not launch Paper Atlas Tool.");
+            return;
+        }
+
+        CloseHandle(process_info.hThread);
+        CloseHandle(process_info.hProcess);
     }
 
     void refresh_texture_replacement_window() {
@@ -2202,21 +2251,29 @@ namespace {
                 284, 56, 104, 30,
                 hwnd, reinterpret_cast<HMENU>(texture_command_open_folder), GetModuleHandleW(nullptr), nullptr);
 
+            texture_atlas_button = CreateWindowExW(
+                0, L"BUTTON", L"Open Paper Atlas Tool",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                20, 98, 180, 30,
+                hwnd, reinterpret_cast<HMENU>(texture_command_open_atlas_tool), GetModuleHandleW(nullptr), nullptr);
+
             texture_dump_progress = CreateWindowExW(
                 0, PROGRESS_CLASSW, nullptr,
                 WS_CHILD | PBS_SMOOTH,
-                20, 98, 368, 18,
+                20, 140, 368, 18,
                 hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
 
             SetWindowTheme(texture_live_replacement_checkbox, L"Explorer", nullptr);
             SetWindowTheme(texture_dump_button, L"Explorer", nullptr);
             SetWindowTheme(reload_button, L"Explorer", nullptr);
             SetWindowTheme(open_button, L"Explorer", nullptr);
+            SetWindowTheme(texture_atlas_button, L"Explorer", nullptr);
             SetWindowTheme(texture_dump_progress, L"Explorer", nullptr);
             SendMessageW(texture_live_replacement_checkbox, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(texture_dump_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(reload_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(open_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            SendMessageW(texture_atlas_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(texture_dump_progress, PBM_SETRANGE32, 0, 100);
             ShowWindow(texture_dump_progress, texture_dump_pass_active ? SW_SHOW : SW_HIDE);
             refresh_texture_replacement_window();
@@ -2252,6 +2309,9 @@ namespace {
             case texture_command_open_folder:
                 open_texture_replacement_folder();
                 return 0;
+            case texture_command_open_atlas_tool:
+                launch_paper_atlas_tool();
+                return 0;
             }
             break;
         case WM_CLOSE:
@@ -2263,6 +2323,7 @@ namespace {
             texture_live_replacement_checkbox = nullptr;
             texture_dump_button = nullptr;
             texture_dump_progress = nullptr;
+            texture_atlas_button = nullptr;
             return 0;
         }
 
@@ -2291,7 +2352,7 @@ namespace {
             RECT owner_rect{};
             GetWindowRect(main_window, &owner_rect);
             constexpr int dialog_width = 420;
-            constexpr int dialog_height = 170;
+            constexpr int dialog_height = 215;
             const int owner_width = static_cast<int>(owner_rect.right - owner_rect.left);
             const int owner_height = static_cast<int>(owner_rect.bottom - owner_rect.top);
             const int x = static_cast<int>(owner_rect.left) + std::max(0, (owner_width - dialog_width) / 2);
@@ -2322,6 +2383,7 @@ namespace {
         texture_live_replacement_checkbox = nullptr;
         texture_dump_button = nullptr;
         texture_dump_progress = nullptr;
+        texture_atlas_button = nullptr;
     }
 
 #endif
@@ -2812,8 +2874,12 @@ namespace {
         return base;
     }
 
-    std::filesystem::path texture_root_path() {
+    std::filesystem::path legacy_texture_root_path() {
         return app_base_path() / "textures";
+    }
+
+    std::filesystem::path texture_root_path() {
+        return app_config_path() / "textures";
     }
 
     std::filesystem::path texture_builtin_path() {
@@ -2828,19 +2894,87 @@ namespace {
         return texture_root_path() / "dumps";
     }
 
+    void migrate_legacy_texture_folder() {
+        std::error_code error;
+        const std::filesystem::path legacy = legacy_texture_root_path();
+        const std::filesystem::path current = texture_root_path();
+        if (!std::filesystem::is_directory(legacy, error) || error) {
+            return;
+        }
+
+        error.clear();
+        if (std::filesystem::exists(current, error) || error) {
+            return;
+        }
+
+        std::filesystem::create_directories(current.parent_path(), error);
+        if (error) {
+            return;
+        }
+
+        std::filesystem::rename(legacy, current, error);
+    }
+
+    bool is_texture_override_file(const std::filesystem::path& path) {
+        std::string extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return extension == ".png" || extension == ".dds";
+    }
+
+    void flatten_legacy_texture_category(const std::filesystem::path& root, const char* category) {
+        std::error_code error;
+        const std::filesystem::path category_path = root / category;
+        if (!std::filesystem::is_directory(category_path, error) || error) {
+            return;
+        }
+
+        std::vector<std::filesystem::path> directories;
+        std::filesystem::recursive_directory_iterator iterator(
+            category_path,
+            std::filesystem::directory_options::skip_permission_denied,
+            error);
+        const std::filesystem::recursive_directory_iterator end;
+        while (!error && iterator != end) {
+            const std::filesystem::path path = iterator->path();
+            if (iterator->is_directory(error) && !error) {
+                directories.push_back(path);
+            }
+            else if (iterator->is_regular_file(error) && !error && is_texture_override_file(path)) {
+                const std::filesystem::path destination = root / path.filename();
+                if (!std::filesystem::exists(destination, error) && !error) {
+                    std::filesystem::rename(path, destination, error);
+                    error.clear();
+                }
+            }
+            iterator.increment(error);
+        }
+
+        std::sort(directories.begin(), directories.end(), [](const auto& lhs, const auto& rhs) {
+            return lhs.native().size() > rhs.native().size();
+        });
+        for (const std::filesystem::path& directory : directories) {
+            std::filesystem::remove(directory, error);
+            error.clear();
+        }
+        std::filesystem::remove(category_path, error);
+    }
+
+    void flatten_legacy_texture_layout(const std::filesystem::path& root) {
+        flatten_legacy_texture_category(root, "sprites");
+        flatten_legacy_texture_category(root, "models");
+        flatten_legacy_texture_category(root, "masks");
+        flatten_legacy_texture_category(root, "misc");
+    }
+
     bool ensure_texture_folder_layout() {
         std::error_code error;
+        migrate_legacy_texture_folder();
         const std::filesystem::path root = texture_root_path();
         const std::filesystem::path starter_folders[] = {
-            texture_replacement_path() / "sprites" / "unassigned",
-            texture_replacement_path() / "models" / "unassigned",
-            texture_replacement_path() / "masks" / "unassigned",
-            texture_replacement_path() / "misc" / "unassigned",
-            texture_dump_path() / "sprites" / "unassigned",
-            texture_dump_path() / "models" / "unassigned",
-            texture_dump_path() / "masks" / "unassigned",
-            texture_dump_path() / "misc" / "unassigned",
-            texture_dump_path() / "_debug" / "raw"
+            texture_replacement_path(),
+            texture_dump_path()
         };
 
         std::filesystem::create_directories(root, error);
@@ -2854,6 +2988,10 @@ namespace {
                 return false;
             }
         }
+
+        flatten_legacy_texture_layout(texture_replacement_path());
+        flatten_legacy_texture_layout(texture_dump_path());
+        std::filesystem::remove(texture_dump_path() / "rt64.json", error);
 
         return ensure_texture_replacement_database(texture_replacement_path());
     }

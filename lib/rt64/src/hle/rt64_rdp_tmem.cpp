@@ -8,8 +8,6 @@
 #include <cinttypes>
 #include <algorithm>
 #include <cstdio>
-#include <fstream>
-#include <iomanip>
 #include <string>
 #include <vector>
 
@@ -30,34 +28,10 @@ namespace RT64 {
             uint8_t a = 255;
         };
 
-        std::string replacementBaseName(uint64_t hash) {
-            char baseName[64];
-            snprintf(baseName, sizeof(baseName), "%016" PRIx64 ".v%u", hash, TMEMHasher::CurrentHashVersion);
-            return std::string(baseName);
-        }
-
         std::string orderedDumpBaseName(uint32_t sequence, uint64_t hash) {
             char baseName[80];
             snprintf(baseName, sizeof(baseName), "%06u_%016" PRIx64 ".v%u", sequence, hash, TMEMHasher::CurrentHashVersion);
             return std::string(baseName);
-        }
-
-        std::filesystem::path replacementTextureFolder(const LoadTile &loadTile, uint32_t tlut) {
-            if ((tlut > 0) || (loadTile.fmt == G_IM_FMT_CI)) {
-                return std::filesystem::path("sprites") / "unassigned";
-            }
-
-            switch (loadTile.fmt) {
-            case G_IM_FMT_RGBA:
-                return std::filesystem::path("models") / "unassigned";
-            case G_IM_FMT_IA:
-            case G_IM_FMT_I:
-                return std::filesystem::path("masks") / "unassigned";
-            case G_IM_FMT_YUV:
-            case G_IM_FMT_DEPTH:
-            default:
-                return std::filesystem::path("misc") / "unassigned";
-            }
         }
 
         uint8_t expand5(uint32_t value) {
@@ -232,19 +206,18 @@ namespace RT64 {
 
         void dumpTexturePNG(const std::filesystem::path &directory, uint32_t sequence, uint64_t hash, State *state, const LoadTile &loadTile, uint16_t width, uint16_t height, uint32_t tlut) {
             const std::string baseName = orderedDumpBaseName(sequence, hash);
-            const std::filesystem::path textureFolder = directory / replacementTextureFolder(loadTile, tlut);
             std::error_code error;
-            std::filesystem::create_directories(textureFolder, error);
+            std::filesystem::create_directories(directory, error);
             if (error) {
                 return;
             }
 
-            const std::filesystem::path pngPath = textureFolder / (baseName + ".png");
+            const std::filesystem::path pngPath = directory / (baseName + ".png");
             if (std::filesystem::exists(pngPath)) {
                 return;
             }
 
-            std::filesystem::directory_iterator iterator(textureFolder, error);
+            std::filesystem::directory_iterator iterator(directory, error);
             const std::filesystem::directory_iterator end;
             while (!error && (iterator != end)) {
                 if (iterator->is_regular_file(error) && !error) {
@@ -272,52 +245,6 @@ namespace RT64 {
             stbi_write_png(pngPathUtf8.c_str(), width, height, 4, rgba.data(), int(width) * 4);
         }
 
-        void ensureReplacementDatabaseEntry(const std::filesystem::path &directory, uint64_t hash) {
-            std::error_code error;
-            std::filesystem::create_directories(directory, error);
-            if (error) {
-                return;
-            }
-
-            ReplacementDatabase database;
-            database.config.autoPath = ReplacementAutoPath::RT64;
-            database.config.defaultOperation = ReplacementOperation::Stream;
-            database.config.defaultShift = ReplacementShift::Half;
-            database.config.hashVersion = TMEMHasher::CurrentHashVersion;
-
-            const std::filesystem::path databasePath = directory / ReplacementDatabaseFilename;
-            if (std::filesystem::exists(databasePath)) {
-                std::ifstream databaseStream(databasePath);
-                if (databaseStream.is_open()) {
-                    try {
-                        json parsed;
-                        databaseStream >> parsed;
-                        database = parsed;
-                    }
-                    catch (const nlohmann::detail::exception &) {
-                        database = ReplacementDatabase();
-                    }
-                }
-            }
-
-            database.config.autoPath = ReplacementAutoPath::RT64;
-            database.config.hashVersion = TMEMHasher::CurrentHashVersion;
-            database.buildHashMaps();
-
-            if (!database.getReplacement(hash).isEmpty()) {
-                return;
-            }
-
-            ReplacementTexture texture;
-            texture.hashes.rt64 = ReplacementDatabase::hashToString(hash);
-            database.addReplacement(texture);
-
-            std::ofstream databaseStream(databasePath);
-            if (databaseStream.is_open()) {
-                json serialized = database;
-                databaseStream << std::setw(4) << serialized << std::endl;
-            }
-        }
     }
 
     // TextureManager
@@ -381,126 +308,7 @@ namespace RT64 {
         const uint32_t sequence = ++dumpSequence;
         
         // Dump the entirety of TMEM.
-        const std::string baseName = replacementBaseName(hash);
-        ensureReplacementDatabaseEntry(state->dumpingTexturesDirectory, hash);
         dumpTexturePNG(state->dumpingTexturesDirectory, sequence, hash, state, loadTile, width, height, tlut);
-
-        const std::filesystem::path rawDumpDirectory = state->dumpingTexturesDirectory / "_debug" / "raw";
-        std::error_code rawDumpError;
-        std::filesystem::create_directories(rawDumpDirectory, rawDumpError);
-        const std::filesystem::path &dumpDirectory = rawDumpError ? state->dumpingTexturesDirectory : rawDumpDirectory;
-
-        std::filesystem::path dumpTmemPath = dumpDirectory / (baseName + ".tmem");
-        std::ofstream dumpTmemStream(dumpTmemPath, std::ios::binary);
-        if (dumpTmemStream.is_open()) {
-            const char *TMEM = reinterpret_cast<const char *>(state->rdp->TMEM);
-            dumpTmemStream.write(TMEM, RDP_TMEM_BYTES);
-            dumpTmemStream.close();
-        }
-
-        // Dump the RDRAM last loaded into the TMEM address pointed to by the tile. Required for generating hashes used by Rice.
-        const LoadOperation &loadOp = state->rdp->rice.lastLoadOpByTMEM[loadTile.tmem];
-        uint32_t rdramStart = loadOp.texture.address;
-        uint32_t rdramCount = 0;
-        uint32_t commonBytesOffset = (loadOp.tile.uls >> 2) << loadOp.texture.siz >> 1;
-        uint32_t commonBytesPerRow = loadOp.texture.width << loadOp.texture.siz >> 1;
-        if (loadOp.type == LoadOperation::Type::Block) {
-            uint32_t wordCount = ((loadOp.tile.lrs - loadOp.tile.uls) >> (4 - loadOp.tile.siz)) + 1;
-            rdramStart = loadOp.texture.address + commonBytesOffset + commonBytesPerRow * loadOp.tile.ult;
-            rdramCount = (wordCount << 3);
-
-            // Increase the amount of RDRAM dumped by textures that require padding when using load block.
-            commonBytesPerRow = std::max(commonBytesPerRow, uint32_t(loadTile.line) << 3U);
-        }
-        else if (loadOp.type == LoadOperation::Type::Tile) {
-            uint32_t rowCount = 1 + ((loadOp.tile.lrt >> 2) - (loadOp.tile.ult >> 2));
-            uint32_t tileWidth = ((loadOp.tile.lrs >> 2) - (loadOp.tile.uls >> 2));
-            uint32_t wordsPerRow = (tileWidth >> (4 - loadOp.tile.siz)) + 1;
-            rdramStart = loadOp.texture.address + commonBytesOffset + commonBytesPerRow * (loadOp.tile.ult >> 2);
-            rdramCount = rowCount * commonBytesPerRow;
-        }
-        
-        // Dump more RDRAM if necessary if it doesn't cover what the tile could possibly sample.
-        uint32_t loadTileBpr = width << loadTile.siz >> 1;
-        rdramCount = std::max(rdramCount, std::max(loadTileBpr, commonBytesPerRow) * height);
-
-        if (rdramCount > 0) {
-            std::filesystem::path dumpRdramPath = dumpDirectory / (baseName + ".rice.rdram");
-            std::ofstream dumpRdramStream(dumpRdramPath, std::ios::binary);
-            if (dumpRdramStream.is_open()) {
-                const char *RDRAM = reinterpret_cast<const char *>(state->RDRAM);
-                dumpRdramStream.write(&RDRAM[rdramStart], rdramCount);
-                dumpRdramStream.close();
-            }
-
-            std::filesystem::path dumpRdramInfoPath = dumpDirectory / (baseName + ".rice.json");
-            std::ofstream dumpRdramInfoStream(dumpRdramInfoPath);
-            if (dumpRdramInfoStream.is_open()) {
-                json jroot;
-                jroot["tile"] = loadOp.tile;
-                jroot["type"] = loadOp.type;
-                jroot["texture"] = loadOp.texture;
-                dumpRdramInfoStream << std::setw(4) << jroot << std::endl;
-                dumpRdramInfoStream.close();
-            }
-        }
-        
-        // Repeat a similar process for dumping the palette.
-        if (tlut > 0) {
-            const bool CI4 = (loadTile.siz == G_IM_SIZ_4b);
-            const int32_t paletteTMEM = (RDP_TMEM_WORDS >> 1) + (CI4 ? (loadTile.palette << 4) : 0);
-            const LoadOperation &paletteLoadOp = state->rdp->rice.lastLoadOpByTMEM[paletteTMEM];
-            uint32_t paletteBytesOffset = (paletteLoadOp.tile.uls >> 2) << paletteLoadOp.texture.siz >> 1;
-            uint32_t paletteBytesPerRow = paletteLoadOp.texture.width << paletteLoadOp.texture.siz >> 1;
-            const uint32_t rowCount = 1 + ((paletteLoadOp.tile.lrt >> 2) - (paletteLoadOp.tile.ult >> 2));
-            const uint32_t wordsPerRow = ((paletteLoadOp.tile.lrs >> 2) - (paletteLoadOp.tile.uls >> 2)) + 1;
-            uint32_t paletteRdramStart = paletteLoadOp.texture.address + paletteBytesOffset + paletteBytesPerRow * (paletteLoadOp.tile.ult >> 2);
-            uint32_t paletteRdramCount = (rowCount - 1) * paletteBytesPerRow + (wordsPerRow << 3);
-            if (paletteRdramCount > 0) {
-                std::filesystem::path dumpPaletteRdramPath = dumpDirectory / (baseName + ".rice.palette.rdram");
-                std::ofstream dumpPaletteRdramStream(dumpPaletteRdramPath, std::ios::binary);
-                if (dumpPaletteRdramStream.is_open()) {
-                    const char *RDRAM = reinterpret_cast<const char *>(state->RDRAM);
-                    dumpPaletteRdramStream.write(&RDRAM[paletteRdramStart], paletteRdramCount);
-                    dumpPaletteRdramStream.close();
-                }
-            }
-
-            std::filesystem::path dumpPaletteRdramInfoPath = dumpDirectory / (baseName + ".rice.palette.json");
-            std::ofstream dumpPaletteRdramInfoStream(dumpPaletteRdramInfoPath);
-            if (dumpPaletteRdramInfoStream.is_open()) {
-                json jroot;
-                jroot["tile"] = paletteLoadOp.tile;
-                jroot["type"] = paletteLoadOp.type;
-                jroot["texture"] = paletteLoadOp.texture;
-                dumpPaletteRdramInfoStream << std::setw(4) << jroot << std::endl;
-                dumpPaletteRdramInfoStream.close();
-            }
-        }
-
-        // Dump the parameters of the tile into a JSON file.
-        std::filesystem::path dumpTilePath = dumpDirectory / (baseName + ".tile.json");
-        std::ofstream dumpTileStream(dumpTilePath);
-        if (dumpTileStream.is_open()) {
-            json jroot;
-            jroot["tile"] = loadTile;
-            jroot["width"] = width;
-            jroot["height"] = height;
-
-            // Serialize the TLUT into an enum instead.
-            if (tlut == G_TT_RGBA16) {
-                jroot["tlut"] = LoadTLUT::RGBA16;
-            }
-            else if (tlut == G_TT_IA16) {
-                jroot["tlut"] = LoadTLUT::IA16;
-            }
-            else {
-                jroot["tlut"] = LoadTLUT::None;
-            }
-
-            dumpTileStream << std::setw(4) << jroot << std::endl;
-            dumpTileStream.close();
-        }
     }
 
     void TextureManager::removeHashes(const std::vector<uint64_t> &hashes) {
