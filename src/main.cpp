@@ -2852,7 +2852,9 @@ namespace {
     }
 
     void poll_input() {
-        SDL_PumpEvents();
+        // SDL event pumping belongs to the host window thread. The game input
+        // callback can run on a game/runtime thread, and pumping Win32 messages
+        // from there makes foreground-window input handling fight the desktop.
     }
 
     float normalize_axis(Sint16 value) {

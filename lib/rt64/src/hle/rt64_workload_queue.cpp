@@ -53,16 +53,16 @@ namespace RT64 {
     void WorkloadQueue::advanceToNextWorkload() {
         int nextWriteCursor = (writeCursor + 1) % workloads.size();
 
-        // Stall the thread until the barrier is lifted if we're trying to write on a workload being used by the GPU.
-        bool waitForBarrier;
-        do {
-            const std::scoped_lock lock(cursorMutex);
-            waitForBarrier = (nextWriteCursor == barrierCursor);
-        } while (waitForBarrier);
-
-        // Modify the cursor and notify anything waiting on the queue.
         {
-            const std::scoped_lock lock(cursorMutex);
+            std::unique_lock<std::mutex> cursorLock(cursorMutex);
+            cursorCondition.wait(cursorLock, [&]() {
+                return (nextWriteCursor != barrierCursor) || !threadsRunning;
+            });
+
+            if (!threadsRunning) {
+                return;
+            }
+
             writeCursor = nextWriteCursor;
         }
 
@@ -838,6 +838,7 @@ namespace RT64 {
     void WorkloadQueue::threadAdvanceBarrier() {
         std::scoped_lock<std::mutex> cursorLock(cursorMutex);
         barrierCursor = (barrierCursor + 1) % workloads.size();
+        cursorCondition.notify_all();
     }
 
     void WorkloadQueue::threadAdvanceWorkloadId(uint64_t newWorkloadId) {
