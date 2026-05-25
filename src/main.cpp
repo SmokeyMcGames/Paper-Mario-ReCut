@@ -2679,6 +2679,7 @@ namespace {
 
 #ifdef _WIN32
         static bool f1_was_down = false;
+        static bool f2_was_down = false;
         static bool f8_was_down = false;
         static bool f10_was_down = false;
         const bool foreground = GetForegroundWindow() == main_window;
@@ -2687,6 +2688,12 @@ namespace {
             toggle_app_menu_bar();
         }
         f1_was_down = f1_down;
+
+        bool f2_down = foreground && (GetAsyncKeyState(VK_F2) & 0x8000) != 0;
+        if (f2_down && !f2_was_down) {
+            set_live_texture_replacement_enabled(!texture_live_replacement_enabled);
+        }
+        f2_was_down = f2_down;
 
         bool f8_down = foreground && (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
         if (f8_down && !f8_was_down) {
