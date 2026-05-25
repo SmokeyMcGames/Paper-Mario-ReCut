@@ -31,6 +31,7 @@ This repository does not include ROM files, extracted ROM assets, save files, or
 This is still an early working build. The game boots and the tooling is actively being shaped around Paper Mario rather than Zelda Recompiled.
 
 Save states are implemented as an early runtime snapshot system. Slot saves and loads are queued onto Paper Mario's main game-loop boundary and store slots in `user/states/`. Treat them as testable while the runtime continues to mature. 
+
 CAUTION: Using Save States in it's current implementation will break the game. Avoid For Now.
 
 Known issue: widescreen is currently broken, but it is still exposed for testing. Expect visual problems if you enable it. The normal 4:3 path is the intended play path for now.
