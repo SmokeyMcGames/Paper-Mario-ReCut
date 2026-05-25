@@ -26,6 +26,8 @@ This repository does not include ROM files, extracted ROM assets, save files, or
 - Paper Atlas can group pieces by similar resolution to make preview cleanup easier.
 - Controller and keyboard configuration windows are present and still being expanded.
 
+NOTE: The current Gamepad Implementaion will auto bind controls to known SDL controllers and the rebind system is currently in the works.
+
 ## Current Status
 
 This is still an early working build. The game boots and the tooling is actively being shaped around Paper Mario rather than Zelda Recompiled.
