@@ -9,10 +9,6 @@
 
 #include "rt64_workload_queue.h"
 
-#ifdef _WIN32
-#   include <dwmapi.h>
-#endif
-
 namespace RT64 {
     // PresentQueue
 
@@ -410,12 +406,6 @@ namespace RT64 {
                 swapChainValid = ext.swapChain->present(swapChainIndex, &waitSemaphore, 1);
                 if (swapChainValid) {
                     ext.sharedResources->presentedFrameCount.fetch_add(1, std::memory_order_relaxed);
-#ifdef _WIN32
-                    // Give DWM a clear synchronization point after foreground
-                    // presents so desktop video/cursor composition gets time
-                    // even when the game window is active.
-                    DwmFlush();
-#endif
                 }
                 presentProfiler.logAndRestart();
             }

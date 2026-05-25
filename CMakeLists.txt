@@ -104,7 +104,7 @@ if (WIN32)
     FetchContent_MakeAvailable(sdl2)
     target_include_directories(PaperMarioReCut PRIVATE "${sdl2_SOURCE_DIR}/include")
     target_link_directories(PaperMarioReCut PRIVATE "${sdl2_SOURCE_DIR}/lib/x64")
-    target_link_libraries(PaperMarioReCut PRIVATE SDL2 Winmm.lib Dbghelp.lib Comdlg32.lib Comctl32.lib UxTheme.lib Dwmapi.lib)
+    target_link_libraries(PaperMarioReCut PRIVATE SDL2 Winmm.lib Dbghelp.lib Comdlg32.lib Comctl32.lib UxTheme.lib)
     add_custom_command(TARGET PaperMarioReCut POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${sdl2_SOURCE_DIR}/lib/x64/SDL2.dll"

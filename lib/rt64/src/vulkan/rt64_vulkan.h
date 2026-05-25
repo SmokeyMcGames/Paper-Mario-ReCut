@@ -222,6 +222,7 @@ namespace RT64 {
         VkCompositeAlphaFlagBitsKHR pickedAlphaFlag = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         std::vector<VulkanTexture> textures;
         uint64_t currentPresentId = 0;
+        bool mailboxPresentModeSupported = false;
         bool immediatePresentModeSupported = false;
 
         VulkanSwapChain(VulkanCommandQueue *commandQueue, RenderWindow renderWindow, uint32_t textureCount, RenderFormat format);

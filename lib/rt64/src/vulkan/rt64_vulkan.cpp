@@ -2036,6 +2036,7 @@ namespace RT64 {
 
         std::vector<VkPresentModeKHR> presentModes(presentModeCount);
         vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes.data());
+        mailboxPresentModeSupported = std::find(presentModes.begin(), presentModes.end(), VK_PRESENT_MODE_MAILBOX_KHR) != presentModes.end();
         immediatePresentModeSupported = std::find(presentModes.begin(), presentModes.end(), VK_PRESENT_MODE_IMMEDIATE_KHR) != presentModes.end();
 
         // Check if the format we requested is part of the supported surface formats.
@@ -2242,10 +2243,16 @@ namespace RT64 {
     }
 
     void VulkanSwapChain::setVsyncEnabled(bool vsyncEnabled) {
-        // Immediate mode must be supported and the presentation mode will only be used on the next resize.
+        // The presentation mode will only be used on the next resize.
         // needsResize() will return as true as long as the created and required present mode do not match.
-        if (immediatePresentModeSupported) {
-            requiredPresentMode = vsyncEnabled ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_IMMEDIATE_KHR;
+        if (vsyncEnabled) {
+            requiredPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+        }
+        else if (mailboxPresentModeSupported) {
+            requiredPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+        }
+        else if (immediatePresentModeSupported) {
+            requiredPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
         }
     }
 
