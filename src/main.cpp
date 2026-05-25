@@ -265,6 +265,8 @@ namespace {
     HWND input_keyboard_action_combo = nullptr;
     HWND input_keyboard_binding_combo = nullptr;
     HWND input_mouse_checkbox = nullptr;
+    HWND gamepad_rebind_window = nullptr;
+    std::array<HWND, input_action_count> gamepad_rebind_combos{};
     bool texture_live_replacement_enabled = false;
     bool texture_dump_pass_active = false;
     AppInputSettings input_window_pending_settings = make_default_input_settings();
@@ -302,6 +304,10 @@ namespace {
     constexpr UINT_PTR input_command_apply_profile = 40502;
     constexpr UINT_PTR input_command_stage_gamepad_binding = 40503;
     constexpr UINT_PTR input_command_stage_keyboard_binding = 40504;
+    constexpr UINT_PTR input_command_open_gamepad_rebind = 40505;
+    constexpr UINT_PTR gamepad_rebind_command_apply = 40600;
+    constexpr UINT_PTR gamepad_rebind_command_close = 40601;
+    constexpr UINT_PTR gamepad_rebind_combo_base = 40620;
 
     constexpr uint8_t menu_hint_max_alpha = 220;
     constexpr double texture_dump_pass_seconds = 8.0;
@@ -319,6 +325,7 @@ namespace {
     void show_graphics_options_window();
     void show_audio_options_window();
     void show_input_options_window();
+    void fill_gamepad_rebind_controls();
     void destroy_texture_replacement_window();
     void destroy_graphics_options_window();
     void destroy_audio_options_window();
@@ -977,7 +984,10 @@ namespace {
     }
 
     void fill_graphics_options_controls() {
-        if (!graphics_options_window) {
+        if (!graphics_options_window || !graphics_resolution_combo || !graphics_aspect_combo ||
+            !graphics_filter_combo || !graphics_anisotropic_combo || !graphics_msaa_combo ||
+            !graphics_downsample_combo || !graphics_framebuffer_combo || !graphics_refresh_combo ||
+            !graphics_upscale_2d_combo || !graphics_hardware_resolve_combo) {
             return;
         }
 
@@ -1195,6 +1205,7 @@ namespace {
     LRESULT CALLBACK graphics_options_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         switch (message) {
         case WM_CREATE:
+            graphics_options_window = hwnd;
             EnableThemeDialogTexture(hwnd, ETDT_ENABLETAB);
             create_label(hwnd, L"Internal resolution", 18, 18, 150);
             graphics_resolution_combo = create_combo(hwnd, menu_command_resolution, 178, 14, 270);
@@ -1308,6 +1319,10 @@ namespace {
     }
 
     void fill_audio_options_controls() {
+        if (!audio_options_window || !audio_volume_combo || !audio_rate_combo || !audio_buffer_combo) {
+            return;
+        }
+
         AudioSettings settings_snapshot{};
         {
             std::lock_guard<std::mutex> lock(settings_mutex);
@@ -1378,6 +1393,7 @@ namespace {
     LRESULT CALLBACK audio_options_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         switch (message) {
         case WM_CREATE:
+            audio_options_window = hwnd;
             EnableThemeDialogTexture(hwnd, ETDT_ENABLETAB);
             create_label(hwnd, L"Volume", 18, 20, 120);
             audio_volume_combo = create_combo(hwnd, audio_command_apply + 1, 150, 16, 190);
@@ -1611,7 +1627,8 @@ namespace {
     }
 
     void fill_input_options_controls() {
-        if (!input_options_window) {
+        if (!input_options_window || !input_controller_combo || !input_gamepad_action_combo ||
+            !input_gamepad_binding_combo || !input_keyboard_action_combo || !input_keyboard_binding_combo) {
             return;
         }
 
@@ -1700,6 +1717,7 @@ namespace {
     void apply_automatic_gamepad_profile() {
         input_window_pending_settings.gamepad_bindings = make_default_input_settings().gamepad_bindings;
         sync_input_gamepad_binding_combo();
+        fill_gamepad_rebind_controls();
     }
 
     void apply_input_options() {
@@ -1725,13 +1743,243 @@ namespace {
         save_recut_settings();
     }
 
+    std::wstring selected_controller_name() {
+        if (input_controller_combo) {
+            const int selection = combo_selection(input_controller_combo);
+            if (selection >= 0 && selection < static_cast<int>(input_controller_choices.size())) {
+                std::wstring label = utf8_to_wide(SDL_GameControllerNameForIndex(input_controller_choices[selection]));
+                if (!label.empty()) {
+                    return label;
+                }
+            }
+        }
+
+        if (controller != nullptr) {
+            std::wstring label = utf8_to_wide(SDL_GameControllerName(controller));
+            if (!label.empty()) {
+                return label;
+            }
+        }
+
+        return L"SDL Gamepad";
+    }
+
+    POINT gamepad_rebind_position(int action_index) {
+        static constexpr POINT positions[input_action_count] = {
+            { 586, 246 }, // A
+            { 492, 246 }, // B
+            { 345, 248 }, // Start
+            { 345, 306 }, // Z
+            { 122, 86 },  // L
+            { 556, 86 },  // R
+            { 620, 164 }, // C Up
+            { 620, 314 }, // C Down
+            { 524, 224 }, // C Left
+            { 672, 224 }, // C Right
+            { 122, 164 }, // D-Pad Up
+            { 122, 314 }, // D-Pad Down
+            { 38, 236 },  // D-Pad Left
+            { 206, 236 }, // D-Pad Right
+            { 292, 150 }, // Stick Up
+            { 292, 326 }, // Stick Down
+            { 216, 236 }, // Stick Left
+            { 358, 236 }  // Stick Right
+        };
+        return positions[std::clamp(action_index, 0, input_action_count - 1)];
+    }
+
+    void populate_gamepad_rebind_combo(HWND combo, const GamepadBinding& binding) {
+        if (!combo) {
+            return;
+        }
+
+        SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+        for (const GamepadBinding& choice : gamepad_binding_choices) {
+            const std::wstring label = gamepad_binding_label(choice);
+            combo_add(combo, label.c_str());
+        }
+        combo_select_clamped(combo, find_gamepad_binding_index(binding));
+    }
+
+    void fill_gamepad_rebind_controls() {
+        if (!gamepad_rebind_window) {
+            return;
+        }
+
+        if (!input_window_pending_valid) {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            input_window_pending_settings = input_settings;
+            input_window_pending_valid = true;
+        }
+
+        build_gamepad_binding_choices();
+        for (int i = 0; i < input_action_count; i++) {
+            populate_gamepad_rebind_combo(gamepad_rebind_combos[i], input_window_pending_settings.gamepad_bindings[i]);
+        }
+    }
+
+    void apply_gamepad_rebind_window() {
+        if (!gamepad_rebind_window) {
+            return;
+        }
+
+        build_gamepad_binding_choices();
+        for (int i = 0; i < input_action_count; i++) {
+            const int binding_index = combo_selection(gamepad_rebind_combos[i]);
+            if (binding_index >= 0 && binding_index < static_cast<int>(gamepad_binding_choices.size())) {
+                input_window_pending_settings.gamepad_bindings[i] = gamepad_binding_choices[binding_index];
+            }
+        }
+        input_window_pending_valid = true;
+
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            input_settings = input_window_pending_settings;
+        }
+        save_recut_settings();
+
+        if (input_options_window) {
+            sync_input_gamepad_binding_combo();
+        }
+    }
+
+    void draw_controller_shape(HDC dc) {
+        HPEN outline = CreatePen(PS_SOLID, 3, GetSysColor(COLOR_WINDOWTEXT));
+        HBRUSH body = CreateSolidBrush(RGB(235, 238, 242));
+        HBRUSH accent = CreateSolidBrush(RGB(218, 224, 232));
+        HPEN old_pen = reinterpret_cast<HPEN>(SelectObject(dc, outline));
+        HBRUSH old_brush = reinterpret_cast<HBRUSH>(SelectObject(dc, body));
+
+        RoundRect(dc, 132, 122, 680, 374, 92, 92);
+        RoundRect(dc, 62, 180, 260, 374, 72, 72);
+        RoundRect(dc, 552, 180, 750, 374, 72, 72);
+        RoundRect(dc, 132, 70, 286, 134, 24, 24);
+        RoundRect(dc, 526, 70, 680, 134, 24, 24);
+
+        SelectObject(dc, accent);
+        Ellipse(dc, 276, 208, 364, 296);
+        RoundRect(dc, 110, 232, 214, 280, 10, 10);
+        RoundRect(dc, 138, 204, 186, 308, 10, 10);
+        Ellipse(dc, 566, 206, 612, 252);
+        Ellipse(dc, 624, 206, 670, 252);
+        Ellipse(dc, 566, 274, 612, 320);
+        Ellipse(dc, 624, 274, 670, 320);
+        RoundRect(dc, 360, 240, 452, 284, 18, 18);
+
+        SelectObject(dc, old_brush);
+        SelectObject(dc, old_pen);
+        DeleteObject(accent);
+        DeleteObject(body);
+        DeleteObject(outline);
+    }
+
+    LRESULT CALLBACK gamepad_rebind_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+        switch (message) {
+        case WM_CREATE: {
+            gamepad_rebind_window = hwnd;
+            EnableThemeDialogTexture(hwnd, ETDT_ENABLETAB);
+            std::fill(gamepad_rebind_combos.begin(), gamepad_rebind_combos.end(), nullptr);
+
+            const std::wstring title = L"Controller: " + selected_controller_name();
+            create_label(hwnd, title.c_str(), 18, 14, 680, 22);
+
+            for (int i = 0; i < input_action_count; i++) {
+                POINT position = gamepad_rebind_position(i);
+                create_label(hwnd, input_actions[i].label, position.x, position.y - 18, 132, 18);
+                gamepad_rebind_combos[i] = create_combo(hwnd, gamepad_rebind_combo_base + i, position.x, position.y, 142);
+            }
+
+            create_button(hwnd, L"Apply", gamepad_rebind_command_apply, 548, 478, 88);
+            create_button(hwnd, L"Close", gamepad_rebind_command_close, 646, 478, 88);
+            fill_gamepad_rebind_controls();
+            return 0;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(hwnd, &paint);
+            RECT rect{};
+            GetClientRect(hwnd, &rect);
+            FillRect(dc, &rect, GetSysColorBrush(COLOR_WINDOW));
+            draw_controller_shape(dc);
+            EndPaint(hwnd, &paint);
+            return 0;
+        }
+        case WM_CTLCOLORSTATIC: {
+            HDC dc = reinterpret_cast<HDC>(wparam);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+        }
+        case WM_COMMAND:
+            switch (LOWORD(wparam)) {
+            case gamepad_rebind_command_apply:
+                apply_gamepad_rebind_window();
+                return 0;
+            case gamepad_rebind_command_close:
+                ShowWindow(hwnd, SW_HIDE);
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        case WM_DESTROY:
+            gamepad_rebind_window = nullptr;
+            std::fill(gamepad_rebind_combos.begin(), gamepad_rebind_combos.end(), nullptr);
+            return 0;
+        }
+
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
+    void show_gamepad_rebind_window() {
+        if (!main_window) {
+            return;
+        }
+
+        if (!gamepad_rebind_window) {
+            const wchar_t* class_name = L"PaperMarioReCutGamepadRebind";
+            static bool registered = false;
+            if (!registered) {
+                WNDCLASSW window_class{};
+                window_class.lpfnWndProc = gamepad_rebind_window_proc;
+                window_class.hInstance = GetModuleHandleW(nullptr);
+                window_class.lpszClassName = class_name;
+                window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+                window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+                RegisterClassW(&window_class);
+                registered = true;
+            }
+
+            gamepad_rebind_window = CreateWindowExW(
+                WS_EX_DLGMODALFRAME,
+                class_name,
+                L"Gamepad Rebind",
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                CW_USEDEFAULT, CW_USEDEFAULT, 780, 560,
+                input_options_window ? input_options_window : main_window,
+                nullptr,
+                GetModuleHandleW(nullptr),
+                nullptr);
+            center_dialog_on_main(gamepad_rebind_window, 780, 560);
+        }
+        else {
+            fill_gamepad_rebind_controls();
+        }
+
+        ShowWindow(gamepad_rebind_window, SW_SHOWNORMAL);
+        InvalidateRect(gamepad_rebind_window, nullptr, TRUE);
+        SetForegroundWindow(gamepad_rebind_window);
+    }
+
     LRESULT CALLBACK input_options_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         switch (message) {
         case WM_CREATE: {
+            input_options_window = hwnd;
             EnableThemeDialogTexture(hwnd, ETDT_ENABLETAB);
             input_tab_control = CreateWindowExW(
                 0, WC_TABCONTROLW, nullptr,
-                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP,
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP | TCS_FIXEDWIDTH,
                 12, 12, 500, 292,
                 hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
             use_ui_font(input_tab_control);
@@ -1742,8 +1990,9 @@ namespace {
             TabCtrl_InsertItem(input_tab_control, 0, &gamepad_tab);
             TCITEMW keyboard_tab{};
             keyboard_tab.mask = TCIF_TEXT;
-            keyboard_tab.pszText = const_cast<wchar_t*>(L"Keyboard / Mouse");
+            keyboard_tab.pszText = const_cast<wchar_t*>(L"Keyboard");
             TabCtrl_InsertItem(input_tab_control, 1, &keyboard_tab);
+            SendMessageW(input_tab_control, TCM_SETITEMSIZE, 0, MAKELPARAM(126, 28));
 
             input_gamepad_page = CreateWindowExW(0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE, 24, 44, 476, 248, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
             input_keyboard_page = CreateWindowExW(0, L"STATIC", nullptr, WS_CHILD, 24, 44, 476, 248, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -1752,6 +2001,7 @@ namespace {
             input_controller_combo = create_combo(input_gamepad_page, input_command_apply + 1, 128, 0, 310);
             input_profile_label = create_label(input_gamepad_page, L"Automatic profile: SDL Gamepad", 128, 36, 310);
             create_button(input_gamepad_page, L"Apply Automatic Profile", input_command_apply_profile, 128, 64, 180);
+            create_button(input_gamepad_page, L"Rebind...", input_command_open_gamepad_rebind, 318, 64, 120);
             create_label(input_gamepad_page, L"Action", 0, 118, 110);
             input_gamepad_action_combo = create_combo(input_gamepad_page, input_command_apply + 2, 128, 114, 170);
             create_label(input_gamepad_page, L"Binding", 0, 154, 110);
@@ -1794,6 +2044,9 @@ namespace {
                 return 0;
             case input_command_apply_profile:
                 apply_automatic_gamepad_profile();
+                return 0;
+            case input_command_open_gamepad_rebind:
+                show_gamepad_rebind_window();
                 return 0;
             case input_command_stage_gamepad_binding:
                 stage_gamepad_binding();
@@ -1879,6 +2132,10 @@ namespace {
     }
 
     void destroy_input_options_window() {
+        if (gamepad_rebind_window) {
+            DestroyWindow(gamepad_rebind_window);
+            gamepad_rebind_window = nullptr;
+        }
         if (input_options_window) {
             DestroyWindow(input_options_window);
             input_options_window = nullptr;
@@ -1888,6 +2145,7 @@ namespace {
     LRESULT CALLBACK texture_replacement_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         switch (message) {
         case WM_CREATE: {
+            texture_replacement_window = hwnd;
             HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
             EnableThemeDialogTexture(hwnd, ETDT_ENABLETAB);
 
