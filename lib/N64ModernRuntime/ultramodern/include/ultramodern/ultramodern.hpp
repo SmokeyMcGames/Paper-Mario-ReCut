@@ -101,6 +101,7 @@ void start_texture_dumping(const std::filesystem::path& directory);
 void stop_texture_dumping();
 bool is_texture_replacement_loaded();
 bool is_texture_dumping();
+renderer::TextureDumpStats get_texture_dump_stats();
 
 // Audio
 void init_audio();

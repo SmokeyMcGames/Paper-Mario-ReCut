@@ -64,7 +64,7 @@ std::atomic<uint8_t*> active_rdram = nullptr;
 
 namespace {
     constexpr size_t save_state_memory_size = 64ULL * 1024ULL * 1024ULL;
-    constexpr uint32_t save_state_version = 1;
+    constexpr uint32_t save_state_version = 2;
 
     struct SaveStateHeader {
         char magic[16];
@@ -76,28 +76,22 @@ namespace {
 
     struct PendingSaveState {
         std::vector<uint8_t> memory;
-        recomp_context context;
     };
 
     std::mutex save_state_mutex;
-    bool save_state_has_context = false;
-    recomp_context save_state_last_context{};
+    std::optional<std::filesystem::path> pending_save_state_path;
     std::optional<PendingSaveState> pending_load_state;
 
     constexpr char save_state_magic[16] = {
         'P', 'M', 'R', 'C', 'S', 'T', 'A', 'T', 'E', '\0', '\0', '\0', '\0', '\0', '\0', '\0'
     };
 
-    void repair_context_pointers(recomp_context& ctx) {
-        ctx.f_odd = ctx.mips3_float_mode ? &ctx.f1.u32l : &ctx.f0.u32h;
-    }
-
     SaveStateHeader make_save_state_header() {
         SaveStateHeader header{};
         std::memcpy(header.magic, save_state_magic, sizeof(header.magic));
         header.version = save_state_version;
         header.memory_size = static_cast<uint32_t>(save_state_memory_size);
-        header.context_size = static_cast<uint32_t>(sizeof(recomp_context));
+        header.context_size = 0;
         return header;
     }
 
@@ -106,7 +100,28 @@ namespace {
             std::memcmp(header.magic, save_state_magic, sizeof(header.magic)) == 0 &&
             header.version == save_state_version &&
             header.memory_size == save_state_memory_size &&
-            header.context_size == sizeof(recomp_context);
+            header.context_size == 0;
+    }
+
+    bool write_save_state_file(const std::filesystem::path& path, const uint8_t* rdram) {
+        std::vector<uint8_t> memory(save_state_memory_size);
+        std::memcpy(memory.data(), rdram, memory.size());
+
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        if (error) {
+            return false;
+        }
+
+        std::ofstream out_file{ path, std::ios::binary | std::ios::trunc };
+        if (!out_file.good()) {
+            return false;
+        }
+
+        const SaveStateHeader header = make_save_state_header();
+        out_file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        out_file.write(reinterpret_cast<const char*>(memory.data()), memory.size());
+        return out_file.good();
     }
 }
 
@@ -238,36 +253,18 @@ recomp::SaveStateResult recomp::save_state_to_file(const std::filesystem::path& 
         return SaveStateResult::GameNotRunning;
     }
 
-    recomp_context context{};
-    {
-        std::lock_guard lock{ save_state_mutex };
-        if (!save_state_has_context) {
-            return SaveStateResult::MissingContext;
-        }
-        context = save_state_last_context;
-    }
-    repair_context_pointers(context);
-
-    std::vector<uint8_t> memory(save_state_memory_size);
-    std::memcpy(memory.data(), rdram, memory.size());
-
     std::error_code error;
     std::filesystem::create_directories(path.parent_path(), error);
     if (error) {
         return SaveStateResult::FileWriteFailed;
     }
 
-    std::ofstream out_file{ path, std::ios::binary | std::ios::trunc };
-    if (!out_file.good()) {
-        return SaveStateResult::FileWriteFailed;
-    }
-
-    const SaveStateHeader header = make_save_state_header();
-    out_file.write(reinterpret_cast<const char*>(&header), sizeof(header));
-    out_file.write(reinterpret_cast<const char*>(&context), sizeof(context));
-    out_file.write(reinterpret_cast<const char*>(memory.data()), memory.size());
-    if (!out_file.good()) {
-        return SaveStateResult::FileWriteFailed;
+    {
+        std::lock_guard lock{ save_state_mutex };
+        if (pending_save_state_path.has_value() || pending_load_state.has_value()) {
+            return SaveStateResult::Busy;
+        }
+        pending_save_state_path = path;
     }
 
     return SaveStateResult::Success;
@@ -280,7 +277,7 @@ recomp::SaveStateResult recomp::load_state_from_file(const std::filesystem::path
 
     {
         std::lock_guard lock{ save_state_mutex };
-        if (pending_load_state.has_value()) {
+        if (pending_save_state_path.has_value() || pending_load_state.has_value()) {
             return SaveStateResult::Busy;
         }
     }
@@ -297,12 +294,6 @@ recomp::SaveStateResult recomp::load_state_from_file(const std::filesystem::path
     }
 
     PendingSaveState state{};
-    in_file.read(reinterpret_cast<char*>(&state.context), sizeof(state.context));
-    if (!in_file.good()) {
-        return SaveStateResult::InvalidFile;
-    }
-    repair_context_pointers(state.context);
-
     state.memory.resize(save_state_memory_size);
     in_file.read(reinterpret_cast<char*>(state.memory.data()), state.memory.size());
     if (!in_file.good()) {
@@ -321,7 +312,7 @@ const char* recomp::save_state_result_message(SaveStateResult result) {
         case SaveStateResult::GameNotRunning:
             return "The game is not running yet.";
         case SaveStateResult::MissingContext:
-            return "The game has not reached a safe save point yet. Try again after the next screen update.";
+            return "The game has not reached a safe save point yet. Try again after the next game frame.";
         case SaveStateResult::FileReadFailed:
             return "Could not read that save-state slot.";
         case SaveStateResult::FileWriteFailed:
@@ -329,40 +320,35 @@ const char* recomp::save_state_result_message(SaveStateResult result) {
         case SaveStateResult::InvalidFile:
             return "That save-state slot is missing or invalid.";
         case SaveStateResult::Busy:
-            return "A save-state load is already queued.";
+            return "A save-state operation is already queued.";
     }
     return "Unknown save-state error.";
 }
 
-void recomp::service_save_state(uint8_t* rdram, recomp_context* context) {
+void recomp::service_save_state_frame_boundary(uint8_t* rdram) {
     active_rdram.store(rdram, std::memory_order_release);
 
     std::optional<PendingSaveState> load_state;
+    std::optional<std::filesystem::path> save_state_path;
     {
         std::lock_guard lock{ save_state_mutex };
         if (pending_load_state.has_value()) {
             load_state = std::move(pending_load_state);
             pending_load_state.reset();
         }
+        else if (pending_save_state_path.has_value()) {
+            save_state_path = std::move(pending_save_state_path);
+            pending_save_state_path.reset();
+        }
     }
 
     if (load_state.has_value()) {
         std::memcpy(rdram, load_state->memory.data(), load_state->memory.size());
-        *context = load_state->context;
-        repair_context_pointers(*context);
-
-        std::lock_guard lock{ save_state_mutex };
-        save_state_last_context = *context;
-        save_state_has_context = true;
         return;
     }
 
-    recomp_context context_copy = *context;
-    repair_context_pointers(context_copy);
-    {
-        std::lock_guard lock{ save_state_mutex };
-        save_state_last_context = context_copy;
-        save_state_has_context = true;
+    if (save_state_path.has_value()) {
+        write_save_state_file(*save_state_path, rdram);
     }
 }
 

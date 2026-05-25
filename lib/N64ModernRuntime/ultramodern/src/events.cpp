@@ -317,7 +317,21 @@ std::atomic_uint64_t presented_frame_count = 0;
 std::atomic<float> resolution_scale = 1.0f;
 std::atomic_bool texture_replacement_loaded = false;
 std::atomic_bool texture_dumping = false;
+std::atomic_uint32_t texture_dump_known_textures = 0;
+std::atomic_uint32_t texture_dump_dumped_textures = 0;
+std::atomic_uint32_t texture_dump_written_textures = 0;
 std::filesystem::path startup_texture_replacement_directory;
+
+static void publish_texture_dump_stats(const ultramodern::renderer::TextureDumpStats& stats) {
+    texture_dump_known_textures.store(stats.known_textures);
+    texture_dump_dumped_textures.store(stats.dumped_textures);
+    texture_dump_written_textures.store(stats.written_textures);
+    texture_dumping.store(stats.active);
+}
+
+static void publish_texture_dump_stats(const std::unique_ptr<ultramodern::renderer::RendererContext>& renderer_context) {
+    publish_texture_dump_stats(renderer_context->get_texture_dump_stats());
+}
 
 uint32_t ultramodern::get_target_framerate(uint32_t original) {
     auto& config = ultramodern::renderer::get_graphics_config();
@@ -379,6 +393,15 @@ bool ultramodern::is_texture_replacement_loaded() {
 
 bool ultramodern::is_texture_dumping() {
     return texture_dumping.load();
+}
+
+ultramodern::renderer::TextureDumpStats ultramodern::get_texture_dump_stats() {
+    return ultramodern::renderer::TextureDumpStats{
+        .known_textures = texture_dump_known_textures.load(),
+        .dumped_textures = texture_dump_dumped_textures.load(),
+        .written_textures = texture_dump_written_textures.load(),
+        .active = texture_dumping.load(),
+    };
 }
 
 std::atomic<ultramodern::renderer::SetupResult> renderer_setup_result = ultramodern::renderer::SetupResult::Success;
@@ -446,6 +469,7 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
                 display_refresh_rate = renderer_context->get_display_framerate();
                 presented_frame_count = renderer_context->get_presented_frame_count();
                 resolution_scale = renderer_context->get_resolution_scale();
+                publish_texture_dump_stats(renderer_context);
             }
             else if (const auto* config_action = std::get_if<UpdateConfigAction>(&action)) {
                 (void)config_action;
@@ -464,11 +488,12 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
             }
             else if (const auto* start_dump_action = std::get_if<StartTextureDumpingAction>(&action)) {
                 texture_dumping.store(renderer_context->start_texture_dumping(start_dump_action->directory));
+                publish_texture_dump_stats(renderer_context);
             }
             else if (const auto* stop_dump_action = std::get_if<StopTextureDumpingAction>(&action)) {
                 (void)stop_dump_action;
                 renderer_context->stop_texture_dumping();
-                texture_dumping.store(false);
+                publish_texture_dump_stats(renderer_context);
             }
         }
     }

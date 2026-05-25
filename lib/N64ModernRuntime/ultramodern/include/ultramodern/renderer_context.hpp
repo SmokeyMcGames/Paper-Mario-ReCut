@@ -45,6 +45,14 @@ namespace ultramodern {
             unsigned int VI_X_SCALE_REG;
             unsigned int VI_Y_SCALE_REG;
         };
+
+        struct TextureDumpStats {
+            uint32_t known_textures = 0;
+            uint32_t dumped_textures = 0;
+            uint32_t written_textures = 0;
+            bool active = false;
+        };
+
         ViRegs* get_vi_regs();
 
 #if defined(_WIN32)
@@ -94,6 +102,7 @@ namespace ultramodern {
                 virtual void clear_texture_replacements() {}
                 virtual bool start_texture_dumping(const std::filesystem::path& directory) { return false; }
                 virtual void stop_texture_dumping() {}
+                virtual TextureDumpStats get_texture_dump_stats() const { return {}; }
 
             protected:
                 SetupResult setup_result;

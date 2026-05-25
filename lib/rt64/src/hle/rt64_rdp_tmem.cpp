@@ -5,6 +5,7 @@
 #include "rt64_rdp_tmem.h"
 
 #include <cassert>
+#include <charconv>
 #include <cinttypes>
 #include <algorithm>
 #include <cstdio>
@@ -204,17 +205,40 @@ namespace RT64 {
             return fileName.find(ReplacementDatabase::hashToString(hash)) != std::string::npos;
         }
 
-        void dumpTexturePNG(const std::filesystem::path &directory, uint32_t sequence, uint64_t hash, State *state, const LoadTile &loadTile, uint16_t width, uint16_t height, uint32_t tlut) {
+        bool parseDumpFilename(const std::filesystem::path &path, uint32_t &sequence, uint64_t &hash) {
+            const std::string stem = path.stem().u8string();
+            const size_t underscore = stem.find('_');
+            const size_t version = stem.find(".v", underscore == std::string::npos ? 0 : underscore + 1);
+            if ((underscore == std::string::npos) || (version == std::string::npos) || (underscore == 0) || (version <= underscore + 1)) {
+                return false;
+            }
+
+            const std::string sequenceText = stem.substr(0, underscore);
+            const std::string hashText = stem.substr(underscore + 1, version - underscore - 1);
+            uint32_t parsedSequence = 0;
+            uint64_t parsedHash = 0;
+            const auto sequenceResult = std::from_chars(sequenceText.data(), sequenceText.data() + sequenceText.size(), parsedSequence, 10);
+            const auto hashResult = std::from_chars(hashText.data(), hashText.data() + hashText.size(), parsedHash, 16);
+            if ((sequenceResult.ec != std::errc{}) || (hashResult.ec != std::errc{})) {
+                return false;
+            }
+
+            sequence = parsedSequence;
+            hash = parsedHash;
+            return true;
+        }
+
+        bool dumpTexturePNG(const std::filesystem::path &directory, uint32_t sequence, uint64_t hash, State *state, const LoadTile &loadTile, uint16_t width, uint16_t height, uint32_t tlut) {
             const std::string baseName = orderedDumpBaseName(sequence, hash);
             std::error_code error;
             std::filesystem::create_directories(directory, error);
             if (error) {
-                return;
+                return false;
             }
 
             const std::filesystem::path pngPath = directory / (baseName + ".png");
             if (std::filesystem::exists(pngPath)) {
-                return;
+                return false;
             }
 
             std::filesystem::directory_iterator iterator(directory, error);
@@ -225,7 +249,7 @@ namespace RT64 {
                     if ((candidatePath.extension() == ".png") && hasHashInFilename(candidatePath.filename().u8string(), hash)) {
                         std::filesystem::rename(candidatePath, pngPath, error);
                         if (!error) {
-                            return;
+                            return false;
                         }
 
                         error.clear();
@@ -238,11 +262,11 @@ namespace RT64 {
             const uint8_t *tmem = reinterpret_cast<const uint8_t *>(state->rdp->TMEM);
             std::vector<uint8_t> rgba;
             if (!decodeTextureToRGBA(tmem, loadTile, width, height, tlut, rgba)) {
-                return;
+                return false;
             }
 
             const std::string pngPathUtf8 = pngPath.u8string();
-            stbi_write_png(pngPathUtf8.c_str(), width, height, 4, rgba.data(), int(width) * 4);
+            return stbi_write_png(pngPathUtf8.c_str(), width, height, 4, rgba.data(), int(width) * 4) != 0;
         }
 
     }
@@ -298,6 +322,35 @@ namespace RT64 {
         return hash;
     }
 
+    void TextureManager::seedDumpedTexturesFromDirectory(const std::filesystem::path &directory) {
+        std::error_code error;
+        if (!std::filesystem::is_directory(directory, error) || error) {
+            return;
+        }
+
+        uint32_t maxSequence = dumpSequence;
+        std::filesystem::directory_iterator iterator(
+            directory,
+            std::filesystem::directory_options::skip_permission_denied,
+            error);
+        const std::filesystem::directory_iterator end;
+        while (!error && (iterator != end)) {
+            if (iterator->is_regular_file(error) && !error && iterator->path().extension() == ".png") {
+                uint32_t parsedSequence = 0;
+                uint64_t parsedHash = 0;
+                if (parseDumpFilename(iterator->path(), parsedSequence, parsedHash)) {
+                    dumpedSet.insert(parsedHash);
+                    maxSequence = std::max(maxSequence, parsedSequence);
+                }
+            }
+
+            iterator.increment(error);
+        }
+
+        dumpSequence = maxSequence;
+        dumpWrittenCount = 0;
+    }
+
     void TextureManager::dumpTexture(uint64_t hash, State *state, const LoadTile &loadTile, uint16_t width, uint16_t height, uint32_t tlut) {
         if (dumpedSet.find(hash) != dumpedSet.end()) {
             return;
@@ -308,7 +361,9 @@ namespace RT64 {
         const uint32_t sequence = ++dumpSequence;
         
         // Dump the entirety of TMEM.
-        dumpTexturePNG(state->dumpingTexturesDirectory, sequence, hash, state, loadTile, width, height, tlut);
+        if (dumpTexturePNG(state->dumpingTexturesDirectory, sequence, hash, state, loadTile, width, height, tlut)) {
+            dumpWrittenCount++;
+        }
     }
 
     void TextureManager::removeHashes(const std::vector<uint64_t> &hashes) {

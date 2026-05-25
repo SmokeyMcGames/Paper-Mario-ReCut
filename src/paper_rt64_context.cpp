@@ -486,8 +486,7 @@ namespace {
                 return false;
             }
 
-            app->state->textureManager.dumpedSet.clear();
-            app->state->textureManager.dumpSequence = 0;
+            app->state->textureManager.seedDumpedTexturesFromDirectory(directory);
             app->state->dumpingTexturesDirectory = directory;
             return true;
         }
@@ -496,6 +495,19 @@ namespace {
             if (app && app->state) {
                 app->state->dumpingTexturesDirectory.clear();
             }
+        }
+
+        ultramodern::renderer::TextureDumpStats get_texture_dump_stats() const override {
+            if (!app || !app->state) {
+                return {};
+            }
+
+            return ultramodern::renderer::TextureDumpStats{
+                .known_textures = static_cast<uint32_t>(app->state->textureManager.hashSet.size()),
+                .dumped_textures = static_cast<uint32_t>(app->state->textureManager.dumpedSet.size()),
+                .written_textures = app->state->textureManager.dumpWrittenCount,
+                .active = !app->state->dumpingTexturesDirectory.empty(),
+            };
         }
 
     private:

@@ -32,6 +32,7 @@
 #endif
 
 #include "librecomp/game.hpp"
+#include "librecomp/overlays.hpp"
 #include "librecomp/rsp.hpp"
 #include "builtin_texture_pack.h"
 #include "paper_rt64_context.h"
@@ -43,12 +44,15 @@ namespace paper_mario {
 }
 
 extern "C" void recomp_entrypoint(uint8_t* rdram, recomp_context* ctx);
+extern "C" recomp_func_t* get_function(int32_t addr);
 gpr get_entrypoint_address();
 
 extern RspUcodeFunc n_aspMain;
 
 namespace {
     constexpr uint64_t paper_mario_us_xxh3 = 0x1A478F060D5194CFULL;
+    constexpr int32_t paper_mario_step_game_loop_vram = 0x80026740;
+    recomp_func_t* original_step_game_loop = nullptr;
 
     constexpr uint16_t A_BUTTON = 0x8000;
     constexpr uint16_t B_BUTTON = 0x4000;
@@ -236,8 +240,10 @@ namespace {
     bool app_menu_bar_visible = false;
     HWND texture_replacement_window = nullptr;
     HWND texture_live_replacement_checkbox = nullptr;
+    HWND texture_continuous_dump_checkbox = nullptr;
     HWND texture_dump_button = nullptr;
     HWND texture_dump_progress = nullptr;
+    HWND texture_dump_status_label = nullptr;
     HWND texture_atlas_button = nullptr;
     HWND texture_tooltip = nullptr;
     HWND graphics_options_window = nullptr;
@@ -273,6 +279,7 @@ namespace {
     int input_keyboard_scroll_offset = 0;
     WNDPROC keyboard_binding_field_proc_prev = nullptr;
     bool texture_live_replacement_enabled = false;
+    bool texture_continuous_dump_enabled = false;
     bool texture_dump_pass_active = false;
     AppInputSettings input_window_pending_settings = make_default_input_settings();
     bool input_window_pending_valid = false;
@@ -297,6 +304,7 @@ namespace {
     constexpr UINT_PTR texture_command_open_folder = 40102;
     constexpr UINT_PTR texture_command_dump_textures = 40103;
     constexpr UINT_PTR texture_command_open_atlas_tool = 40104;
+    constexpr UINT_PTR texture_command_continuous_dump = 40105;
     constexpr UINT_PTR texture_dump_timer = 40200;
     constexpr UINT_PTR graphics_command_apply = 40300;
     constexpr UINT_PTR graphics_command_close = 40301;
@@ -327,6 +335,7 @@ namespace {
     void destroy_input_options_window();
     void refresh_texture_replacement_window();
     void update_texture_dump_progress();
+    uint32_t count_png_files_recursive(const std::filesystem::path& directory);
     bool handle_menu_command(UINT_PTR command, HWND hwnd);
     void launch_paper_atlas_tool();
 
@@ -344,7 +353,7 @@ namespace {
     void save_state_slot(int slot) {
         const recomp::SaveStateResult result = recomp::save_state_to_file(save_state_slot_path(slot));
         if (result == recomp::SaveStateResult::Success) {
-            show_info_message(("Saved state slot " + std::to_string(slot) + ".").c_str());
+            show_info_message(("Queued save state slot " + std::to_string(slot) + ". It will capture on the next game frame.").c_str());
             return;
         }
 
@@ -355,7 +364,7 @@ namespace {
     void load_state_slot(int slot) {
         const recomp::SaveStateResult result = recomp::load_state_from_file(save_state_slot_path(slot));
         if (result == recomp::SaveStateResult::Success) {
-            show_info_message(("Loaded state slot " + std::to_string(slot) + ".").c_str());
+            show_info_message(("Queued load state slot " + std::to_string(slot) + ". It will apply on the next game frame.").c_str());
             return;
         }
 
@@ -546,23 +555,27 @@ namespace {
 
         texture_dump_pass_active = false;
         texture_dump_input_paused.store(false, std::memory_order_relaxed);
-        ultramodern::stop_texture_dumping();
+        if (!texture_continuous_dump_enabled) {
+            ultramodern::stop_texture_dumping();
+        }
 
         if (texture_dump_progress) {
             SendMessageW(texture_dump_progress, PBM_SETPOS, 100, 0);
-            ShowWindow(texture_dump_progress, SW_HIDE);
+            if (!texture_continuous_dump_enabled) {
+                ShowWindow(texture_dump_progress, SW_HIDE);
+            }
         }
         if (texture_dump_button) {
-            EnableWindow(texture_dump_button, TRUE);
-            SetWindowTextW(texture_dump_button, L"Dump Textures");
+            EnableWindow(texture_dump_button, texture_continuous_dump_enabled ? FALSE : TRUE);
+            SetWindowTextW(texture_dump_button, texture_continuous_dump_enabled ? L"Continuous..." : L"Dump Textures");
         }
-        if (texture_replacement_window) {
+        if (texture_replacement_window && !texture_continuous_dump_enabled) {
             KillTimer(texture_replacement_window, texture_dump_timer);
         }
     }
 
     void start_texture_dump_pass() {
-        if (texture_dump_pass_active) {
+        if (texture_dump_pass_active || texture_continuous_dump_enabled) {
             return;
         }
 
@@ -581,6 +594,10 @@ namespace {
             SendMessageW(texture_dump_progress, PBM_SETPOS, 0, 0);
             ShowWindow(texture_dump_progress, SW_SHOW);
         }
+        if (texture_dump_status_label) {
+            SetWindowTextW(texture_dump_status_label, L"0% - 0 textures dumped");
+            ShowWindow(texture_dump_status_label, SW_SHOW);
+        }
         if (texture_dump_button) {
             EnableWindow(texture_dump_button, FALSE);
             SetWindowTextW(texture_dump_button, L"Dumping...");
@@ -591,20 +608,86 @@ namespace {
     }
 
     void update_texture_dump_progress() {
-        if (!texture_dump_pass_active) {
+        if (!texture_dump_pass_active && !texture_continuous_dump_enabled) {
             return;
         }
 
-        const auto now = std::chrono::steady_clock::now();
-        const double elapsed = std::chrono::duration<double>(now - texture_dump_pass_started).count();
-        const int percent = std::clamp(static_cast<int>((elapsed / texture_dump_pass_seconds) * 100.0), 0, 100);
+        int percent = 0;
+        if (texture_continuous_dump_enabled) {
+            const auto stats = ultramodern::get_texture_dump_stats();
+            const uint32_t total = std::max(stats.known_textures, stats.dumped_textures);
+            percent = total == 0 ? 0 : std::clamp(static_cast<int>((uint64_t(stats.dumped_textures) * 100ULL) / total), 0, 100);
+            if (texture_dump_status_label) {
+                std::wstring text = L"Continuous: " + std::to_wstring(percent) + L"% - " +
+                    std::to_wstring(stats.dumped_textures) + L"/" + std::to_wstring(total) + L" known textures dumped";
+                SetWindowTextW(texture_dump_status_label, text.c_str());
+            }
+        }
+        else {
+            const auto now = std::chrono::steady_clock::now();
+            const double elapsed = std::chrono::duration<double>(now - texture_dump_pass_started).count();
+            percent = std::clamp(static_cast<int>((elapsed / texture_dump_pass_seconds) * 100.0), 0, 100);
+            if (texture_dump_status_label) {
+                const uint32_t dumped_count = std::max(count_png_files_recursive(texture_dump_path()), ultramodern::get_texture_dump_stats().dumped_textures);
+                std::wstring text = std::to_wstring(percent) + L"% - " + std::to_wstring(dumped_count) + L" textures dumped";
+                SetWindowTextW(texture_dump_status_label, text.c_str());
+            }
+
+            if (elapsed >= texture_dump_pass_seconds) {
+                stop_texture_dump_pass();
+                return;
+            }
+        }
+
         if (texture_dump_progress) {
             SendMessageW(texture_dump_progress, PBM_SETPOS, percent, 0);
         }
+    }
 
-        if (elapsed >= texture_dump_pass_seconds) {
-            stop_texture_dump_pass();
+    void set_continuous_texture_dump_enabled(bool enabled) {
+        if (texture_continuous_dump_enabled == enabled) {
+            return;
         }
+
+        if (enabled && !ensure_texture_folder_layout()) {
+            refresh_texture_replacement_window();
+            show_message("Paper Mario ReCut could not prepare the texture dump folder.");
+            return;
+        }
+
+        texture_continuous_dump_enabled = enabled;
+        texture_dump_input_paused.store(false, std::memory_order_relaxed);
+        texture_dump_pass_active = false;
+
+        if (enabled) {
+            ultramodern::start_texture_dumping(texture_dump_path());
+            if (texture_dump_progress) {
+                SendMessageW(texture_dump_progress, PBM_SETRANGE32, 0, 100);
+                SendMessageW(texture_dump_progress, PBM_SETPOS, 0, 0);
+                ShowWindow(texture_dump_progress, SW_SHOW);
+            }
+            if (texture_dump_status_label) {
+                SetWindowTextW(texture_dump_status_label, L"Continuous: 0% - 0/0 known textures dumped");
+                ShowWindow(texture_dump_status_label, SW_SHOW);
+            }
+            if (texture_replacement_window) {
+                SetTimer(texture_replacement_window, texture_dump_timer, 250, nullptr);
+            }
+        }
+        else {
+            ultramodern::stop_texture_dumping();
+            if (texture_dump_progress) {
+                ShowWindow(texture_dump_progress, SW_HIDE);
+            }
+            if (texture_dump_status_label) {
+                SetWindowTextW(texture_dump_status_label, L"Continuous dump off.");
+            }
+            if (texture_replacement_window) {
+                KillTimer(texture_replacement_window, texture_dump_timer);
+            }
+        }
+
+        refresh_texture_replacement_window();
     }
 
     void reload_texture_replacement_folder() {
@@ -694,6 +777,35 @@ namespace {
         return false;
     }
 
+    uint32_t count_png_files_recursive(const std::filesystem::path& directory) {
+        std::error_code error;
+        if (!std::filesystem::is_directory(directory, error) || error) {
+            return 0;
+        }
+
+        uint32_t count = 0;
+        std::filesystem::recursive_directory_iterator iterator(
+            directory,
+            std::filesystem::directory_options::skip_permission_denied,
+            error);
+        const std::filesystem::recursive_directory_iterator end;
+        while (!error && iterator != end) {
+            if (iterator->is_regular_file(error) && !error) {
+                std::string extension = iterator->path().extension().string();
+                std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+                if (extension == ".png") {
+                    count++;
+                }
+            }
+
+            iterator.increment(error);
+        }
+
+        return count;
+    }
+
     void show_paper_atlas_folder_notice(bool dump_missing, bool dump_empty, bool replacements_missing) {
         std::wstring message = L"Paper Atlas could not find everything it normally uses:\n\n";
 
@@ -774,6 +886,23 @@ namespace {
                 texture_replacement_window,
                 static_cast<int>(texture_command_live_replacement),
                 texture_live_replacement_enabled ? BST_CHECKED : BST_UNCHECKED);
+        }
+
+        if (texture_continuous_dump_checkbox) {
+            CheckDlgButton(
+                texture_replacement_window,
+                static_cast<int>(texture_command_continuous_dump),
+                texture_continuous_dump_enabled ? BST_CHECKED : BST_UNCHECKED);
+        }
+
+        if (texture_dump_button) {
+            EnableWindow(texture_dump_button, texture_continuous_dump_enabled || texture_dump_pass_active ? FALSE : TRUE);
+            if (texture_continuous_dump_enabled) {
+                SetWindowTextW(texture_dump_button, L"Continuous...");
+            }
+            else if (!texture_dump_pass_active) {
+                SetWindowTextW(texture_dump_button, L"Dump Textures");
+            }
         }
 
     }
@@ -2356,10 +2485,16 @@ namespace {
                 20, 18, 240, 24,
                 hwnd, reinterpret_cast<HMENU>(texture_command_live_replacement), GetModuleHandleW(nullptr), nullptr);
 
+            texture_continuous_dump_checkbox = CreateWindowExW(
+                0, L"BUTTON", L"Continuous Dump",
+                WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                20, 44, 240, 24,
+                hwnd, reinterpret_cast<HMENU>(texture_command_continuous_dump), GetModuleHandleW(nullptr), nullptr);
+
             texture_dump_button = CreateWindowExW(
                 0, L"BUTTON", L"Dump Textures",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                20, 56, 122, 30,
+                20, 82, 122, 30,
                 hwnd, reinterpret_cast<HMENU>(texture_command_dump_textures), GetModuleHandleW(nullptr), nullptr);
 
             texture_tooltip = CreateWindowExW(
@@ -2375,45 +2510,59 @@ namespace {
                     hwnd,
                     texture_dump_button,
                     L"Pauses game input briefly and captures the currently loaded scene textures as PNG v5 files in user\\textures\\dumps. Move to the scene you want first, then press this.");
+                add_tooltip(
+                    texture_tooltip,
+                    hwnd,
+                    texture_continuous_dump_checkbox,
+                    L"This will constantly dump textures as they are created and can cause massive slowdowns depending on hardware.");
             }
 
             HWND reload_button = CreateWindowExW(
                 0, L"BUTTON", L"Reload Folder",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                152, 56, 122, 30,
+                152, 82, 122, 30,
                 hwnd, reinterpret_cast<HMENU>(texture_command_reload), GetModuleHandleW(nullptr), nullptr);
 
             HWND open_button = CreateWindowExW(
                 0, L"BUTTON", L"Open Folder",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                284, 56, 104, 30,
+                284, 82, 104, 30,
                 hwnd, reinterpret_cast<HMENU>(texture_command_open_folder), GetModuleHandleW(nullptr), nullptr);
 
             texture_atlas_button = CreateWindowExW(
                 0, L"BUTTON", L"Open Paper Atlas Tool",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                20, 98, 180, 30,
+                20, 124, 180, 30,
                 hwnd, reinterpret_cast<HMENU>(texture_command_open_atlas_tool), GetModuleHandleW(nullptr), nullptr);
 
             texture_dump_progress = CreateWindowExW(
                 0, PROGRESS_CLASSW, nullptr,
                 WS_CHILD | PBS_SMOOTH,
-                20, 140, 368, 18,
+                20, 166, 368, 18,
+                hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+            texture_dump_status_label = CreateWindowExW(
+                0, L"STATIC", L"",
+                WS_CHILD | WS_VISIBLE | SS_LEFT,
+                20, 190, 368, 22,
                 hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
 
             SetWindowTheme(texture_live_replacement_checkbox, L"Explorer", nullptr);
+            SetWindowTheme(texture_continuous_dump_checkbox, L"Explorer", nullptr);
             SetWindowTheme(texture_dump_button, L"Explorer", nullptr);
             SetWindowTheme(reload_button, L"Explorer", nullptr);
             SetWindowTheme(open_button, L"Explorer", nullptr);
             SetWindowTheme(texture_atlas_button, L"Explorer", nullptr);
             SetWindowTheme(texture_dump_progress, L"Explorer", nullptr);
             SendMessageW(texture_live_replacement_checkbox, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            SendMessageW(texture_continuous_dump_checkbox, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(texture_dump_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(reload_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(open_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(texture_atlas_button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            SendMessageW(texture_dump_status_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             SendMessageW(texture_dump_progress, PBM_SETRANGE32, 0, 100);
-            ShowWindow(texture_dump_progress, texture_dump_pass_active ? SW_SHOW : SW_HIDE);
+            ShowWindow(texture_dump_progress, (texture_dump_pass_active || texture_continuous_dump_enabled) ? SW_SHOW : SW_HIDE);
             refresh_texture_replacement_window();
             return 0;
         }
@@ -2438,6 +2587,13 @@ namespace {
                     return 0;
                 }
                 break;
+            case texture_command_continuous_dump:
+                if (HIWORD(wparam) == BN_CLICKED) {
+                    const bool enabled = IsDlgButtonChecked(hwnd, static_cast<int>(texture_command_continuous_dump)) == BST_CHECKED;
+                    set_continuous_texture_dump_enabled(enabled);
+                    return 0;
+                }
+                break;
             case texture_command_dump_textures:
                 start_texture_dump_pass();
                 return 0;
@@ -2459,8 +2615,10 @@ namespace {
             KillTimer(hwnd, texture_dump_timer);
             texture_replacement_window = nullptr;
             texture_live_replacement_checkbox = nullptr;
+            texture_continuous_dump_checkbox = nullptr;
             texture_dump_button = nullptr;
             texture_dump_progress = nullptr;
+            texture_dump_status_label = nullptr;
             texture_atlas_button = nullptr;
             texture_tooltip = nullptr;
             return 0;
@@ -2491,7 +2649,7 @@ namespace {
             RECT owner_rect{};
             GetWindowRect(main_window, &owner_rect);
             constexpr int dialog_width = 420;
-            constexpr int dialog_height = 215;
+            constexpr int dialog_height = 260;
             const int owner_width = static_cast<int>(owner_rect.right - owner_rect.left);
             const int owner_height = static_cast<int>(owner_rect.bottom - owner_rect.top);
             const int x = static_cast<int>(owner_rect.left) + std::max(0, (owner_width - dialog_width) / 2);
@@ -2520,8 +2678,10 @@ namespace {
             texture_replacement_window = nullptr;
         }
         texture_live_replacement_checkbox = nullptr;
+        texture_continuous_dump_checkbox = nullptr;
         texture_dump_button = nullptr;
         texture_dump_progress = nullptr;
+        texture_dump_status_label = nullptr;
         texture_atlas_button = nullptr;
     }
 
@@ -2547,6 +2707,19 @@ namespace {
         }
 #endif
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Paper Mario ReCut", msg, window);
+    }
+
+    void recut_step_game_loop(uint8_t* rdram, recomp_context* ctx) {
+        recomp::service_save_state_frame_boundary(rdram);
+
+        if (original_step_game_loop != nullptr) {
+            original_step_game_loop(rdram, ctx);
+        }
+    }
+
+    void install_recut_frame_hooks(uint8_t*, recomp_context*) {
+        original_step_game_loop = get_function(paper_mario_step_game_loop_vram);
+        recomp::overlays::add_loaded_function(paper_mario_step_game_loop_vram, recut_step_game_loop);
     }
 
     bool open_controller_index(int device_index) {
@@ -3477,7 +3650,7 @@ int main(int argc, char** argv) {
 #endif
 
     recomp::Version version{};
-    if (!recomp::Version::from_string("0.1.0", version)) {
+    if (!recomp::Version::from_string("0.1.1", version)) {
         return EXIT_FAILURE;
     }
 
@@ -3493,6 +3666,7 @@ int main(int argc, char** argv) {
         .has_compressed_code = false,
         .entrypoint_address = get_entrypoint_address(),
         .entrypoint = recomp_entrypoint,
+        .on_init_callback = install_recut_frame_hooks,
     };
 
     recomp::register_config_path(app_config_path());
