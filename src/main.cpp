@@ -264,6 +264,11 @@ namespace {
     HWND input_mouse_checkbox = nullptr;
     HWND gamepad_rebind_window = nullptr;
     std::array<HWND, input_action_count> gamepad_rebind_combos{};
+    std::array<HWND, input_action_count> input_keyboard_action_labels{};
+    std::array<HWND, input_action_count> input_keyboard_binding_fields{};
+    int input_keyboard_capture_action = -1;
+    int input_keyboard_scroll_offset = 0;
+    WNDPROC keyboard_binding_field_proc_prev = nullptr;
     bool texture_live_replacement_enabled = false;
     bool texture_dump_pass_active = false;
     AppInputSettings input_window_pending_settings = make_default_input_settings();
@@ -295,11 +300,14 @@ namespace {
     constexpr UINT_PTR input_command_close = 40501;
     constexpr UINT_PTR input_command_apply_profile = 40502;
     constexpr UINT_PTR input_command_open_gamepad_rebind = 40505;
+    constexpr UINT_PTR input_keyboard_binding_field_base = 40520;
     constexpr UINT_PTR gamepad_rebind_command_apply = 40600;
     constexpr UINT_PTR gamepad_rebind_command_close = 40601;
     constexpr UINT_PTR gamepad_rebind_combo_base = 40620;
 
     constexpr double texture_dump_pass_seconds = 8.0;
+    constexpr int input_keyboard_view_height = 248;
+    constexpr int input_keyboard_content_height = 462;
 
     void set_app_menu_bar_visible(bool visible);
     void show_texture_replacement_window();
@@ -1360,6 +1368,305 @@ namespace {
         return 0;
     }
 
+    std::wstring keyboard_binding_label(SDL_Scancode scancode) {
+        if (scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_NUM_SCANCODES) {
+            return L"";
+        }
+
+        std::wstring label = utf8_to_wide(SDL_GetScancodeName(scancode));
+        return label.empty() ? L"" : label;
+    }
+
+    void set_keyboard_binding_field_text(int action_index, const wchar_t* override_text = nullptr) {
+        if (action_index < 0 || action_index >= input_action_count) {
+            return;
+        }
+
+        HWND field = input_keyboard_binding_fields[action_index];
+        if (!field) {
+            return;
+        }
+
+        if (override_text != nullptr) {
+            SetWindowTextW(field, override_text);
+            return;
+        }
+
+        const std::wstring label = keyboard_binding_label(input_window_pending_settings.keyboard_bindings[action_index]);
+        SetWindowTextW(field, label.c_str());
+    }
+
+    void refresh_keyboard_binding_fields() {
+        for (int i = 0; i < input_action_count; i++) {
+            set_keyboard_binding_field_text(i);
+        }
+    }
+
+    int max_keyboard_scroll_offset() {
+        return std::max(0, input_keyboard_content_height - input_keyboard_view_height);
+    }
+
+    void update_keyboard_page_scrollbar() {
+        if (!input_keyboard_page) {
+            return;
+        }
+
+        SCROLLINFO scroll_info{};
+        scroll_info.cbSize = sizeof(scroll_info);
+        scroll_info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+        scroll_info.nMin = 0;
+        scroll_info.nMax = input_keyboard_content_height - 1;
+        scroll_info.nPage = input_keyboard_view_height;
+        scroll_info.nPos = input_keyboard_scroll_offset;
+        SetScrollInfo(input_keyboard_page, SB_VERT, &scroll_info, TRUE);
+    }
+
+    void layout_keyboard_page_controls() {
+        for (int i = 0; i < input_action_count; i++) {
+            const int y = 8 + (i * 23) - input_keyboard_scroll_offset;
+            if (input_keyboard_action_labels[i]) {
+                SetWindowPos(input_keyboard_action_labels[i], nullptr, 0, y + 2, 144, 18, SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            if (input_keyboard_binding_fields[i]) {
+                SetWindowPos(input_keyboard_binding_fields[i], nullptr, 154, y, 230, 22, SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+        }
+
+        if (input_mouse_checkbox) {
+            SetWindowPos(input_mouse_checkbox, nullptr, 0, 430 - input_keyboard_scroll_offset, 220, 24, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+
+        update_keyboard_page_scrollbar();
+    }
+
+    void scroll_keyboard_page_to(int offset) {
+        input_keyboard_scroll_offset = std::clamp(offset, 0, max_keyboard_scroll_offset());
+        layout_keyboard_page_controls();
+    }
+
+    void scroll_keyboard_page_by(int delta) {
+        scroll_keyboard_page_to(input_keyboard_scroll_offset + delta);
+    }
+
+    SDL_Scancode scancode_from_windows_key(WPARAM key, LPARAM key_info) {
+        const bool extended = (key_info & (1 << 24)) != 0;
+
+        if (key >= 'A' && key <= 'Z') {
+            return static_cast<SDL_Scancode>(SDL_SCANCODE_A + (key - 'A'));
+        }
+        if (key >= '1' && key <= '9') {
+            return static_cast<SDL_Scancode>(SDL_SCANCODE_1 + (key - '1'));
+        }
+        if (key == '0') {
+            return SDL_SCANCODE_0;
+        }
+        if (key >= VK_F1 && key <= VK_F12) {
+            return static_cast<SDL_Scancode>(SDL_SCANCODE_F1 + (key - VK_F1));
+        }
+
+        switch (key) {
+        case VK_BACK: return SDL_SCANCODE_BACKSPACE;
+        case VK_TAB: return SDL_SCANCODE_TAB;
+        case VK_RETURN: return extended ? SDL_SCANCODE_KP_ENTER : SDL_SCANCODE_RETURN;
+        case VK_ESCAPE: return SDL_SCANCODE_ESCAPE;
+        case VK_SPACE: return SDL_SCANCODE_SPACE;
+        case VK_PRIOR: return SDL_SCANCODE_PAGEUP;
+        case VK_NEXT: return SDL_SCANCODE_PAGEDOWN;
+        case VK_END: return SDL_SCANCODE_END;
+        case VK_HOME: return SDL_SCANCODE_HOME;
+        case VK_LEFT: return SDL_SCANCODE_LEFT;
+        case VK_UP: return SDL_SCANCODE_UP;
+        case VK_RIGHT: return SDL_SCANCODE_RIGHT;
+        case VK_DOWN: return SDL_SCANCODE_DOWN;
+        case VK_INSERT: return SDL_SCANCODE_INSERT;
+        case VK_DELETE: return SDL_SCANCODE_DELETE;
+        case VK_SHIFT: return ((key_info >> 16) & 0xff) == 0x36 ? SDL_SCANCODE_RSHIFT : SDL_SCANCODE_LSHIFT;
+        case VK_LSHIFT: return SDL_SCANCODE_LSHIFT;
+        case VK_RSHIFT: return SDL_SCANCODE_RSHIFT;
+        case VK_CONTROL: return extended ? SDL_SCANCODE_RCTRL : SDL_SCANCODE_LCTRL;
+        case VK_LCONTROL: return SDL_SCANCODE_LCTRL;
+        case VK_RCONTROL: return SDL_SCANCODE_RCTRL;
+        case VK_MENU: return extended ? SDL_SCANCODE_RALT : SDL_SCANCODE_LALT;
+        case VK_LMENU: return SDL_SCANCODE_LALT;
+        case VK_RMENU: return SDL_SCANCODE_RALT;
+        case VK_LWIN: return SDL_SCANCODE_LGUI;
+        case VK_RWIN: return SDL_SCANCODE_RGUI;
+        case VK_APPS: return SDL_SCANCODE_APPLICATION;
+        case VK_CAPITAL: return SDL_SCANCODE_CAPSLOCK;
+        case VK_NUMPAD0: return SDL_SCANCODE_KP_0;
+        case VK_NUMPAD1: return SDL_SCANCODE_KP_1;
+        case VK_NUMPAD2: return SDL_SCANCODE_KP_2;
+        case VK_NUMPAD3: return SDL_SCANCODE_KP_3;
+        case VK_NUMPAD4: return SDL_SCANCODE_KP_4;
+        case VK_NUMPAD5: return SDL_SCANCODE_KP_5;
+        case VK_NUMPAD6: return SDL_SCANCODE_KP_6;
+        case VK_NUMPAD7: return SDL_SCANCODE_KP_7;
+        case VK_NUMPAD8: return SDL_SCANCODE_KP_8;
+        case VK_NUMPAD9: return SDL_SCANCODE_KP_9;
+        case VK_MULTIPLY: return SDL_SCANCODE_KP_MULTIPLY;
+        case VK_ADD: return SDL_SCANCODE_KP_PLUS;
+        case VK_SUBTRACT: return SDL_SCANCODE_KP_MINUS;
+        case VK_DECIMAL: return SDL_SCANCODE_KP_PERIOD;
+        case VK_DIVIDE: return SDL_SCANCODE_KP_DIVIDE;
+        case VK_OEM_1: return SDL_SCANCODE_SEMICOLON;
+        case VK_OEM_PLUS: return SDL_SCANCODE_EQUALS;
+        case VK_OEM_COMMA: return SDL_SCANCODE_COMMA;
+        case VK_OEM_MINUS: return SDL_SCANCODE_MINUS;
+        case VK_OEM_PERIOD: return SDL_SCANCODE_PERIOD;
+        case VK_OEM_2: return SDL_SCANCODE_SLASH;
+        case VK_OEM_3: return SDL_SCANCODE_GRAVE;
+        case VK_OEM_4: return SDL_SCANCODE_LEFTBRACKET;
+        case VK_OEM_5: return SDL_SCANCODE_BACKSLASH;
+        case VK_OEM_6: return SDL_SCANCODE_RIGHTBRACKET;
+        case VK_OEM_7: return SDL_SCANCODE_APOSTROPHE;
+        default: return SDL_SCANCODE_UNKNOWN;
+        }
+    }
+
+    void start_keyboard_binding_capture(int action_index) {
+        if (action_index < 0 || action_index >= input_action_count) {
+            return;
+        }
+
+        if (input_keyboard_capture_action >= 0 && input_keyboard_capture_action != action_index) {
+            set_keyboard_binding_field_text(input_keyboard_capture_action);
+        }
+
+        input_keyboard_capture_action = action_index;
+        set_keyboard_binding_field_text(action_index, L"Press a key...");
+        SetFocus(input_keyboard_binding_fields[action_index]);
+    }
+
+    void finish_keyboard_binding_capture(int action_index, WPARAM key, LPARAM key_info) {
+        const SDL_Scancode scancode = scancode_from_windows_key(key, key_info);
+        if (scancode == SDL_SCANCODE_UNKNOWN) {
+            MessageBeep(MB_ICONWARNING);
+            return;
+        }
+
+        if (!input_window_pending_valid) {
+            std::lock_guard<std::mutex> lock(settings_mutex);
+            input_window_pending_settings = input_settings;
+            input_window_pending_valid = true;
+        }
+
+        input_window_pending_settings.keyboard_bindings[action_index] = scancode;
+        input_keyboard_capture_action = -1;
+        set_keyboard_binding_field_text(action_index);
+    }
+
+    LRESULT CALLBACK keyboard_binding_field_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+        const int action_index = static_cast<int>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        switch (message) {
+        case WM_LBUTTONDOWN:
+            start_keyboard_binding_capture(action_index);
+            return 0;
+        case WM_GETDLGCODE:
+            if (input_keyboard_capture_action == action_index) {
+                return DLGC_WANTALLKEYS;
+            }
+            break;
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+            if (input_keyboard_capture_action == action_index) {
+                finish_keyboard_binding_capture(action_index, wparam, lparam);
+                return 0;
+            }
+            break;
+        case WM_CHAR:
+        case WM_SYSCHAR:
+            if (input_keyboard_capture_action == action_index) {
+                return 0;
+            }
+            break;
+        case WM_MOUSEWHEEL:
+            if (input_keyboard_page) {
+                SendMessageW(input_keyboard_page, message, wparam, lparam);
+                return 0;
+            }
+            break;
+        case WM_KILLFOCUS:
+            if (input_keyboard_capture_action == action_index) {
+                input_keyboard_capture_action = -1;
+                set_keyboard_binding_field_text(action_index);
+            }
+            break;
+        }
+
+        return keyboard_binding_field_proc_prev
+            ? CallWindowProcW(keyboard_binding_field_proc_prev, hwnd, message, wparam, lparam)
+            : DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
+    HWND create_keyboard_binding_field(HWND parent, int action_index, int x, int y, int width) {
+        HWND field = CreateWindowExW(
+            WS_EX_CLIENTEDGE, L"EDIT", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_LEFT | ES_READONLY | ES_AUTOHSCROLL,
+            x, y, width, 22,
+            parent, reinterpret_cast<HMENU>(input_keyboard_binding_field_base + action_index), GetModuleHandleW(nullptr), nullptr);
+        use_ui_font(field);
+        SetWindowTheme(field, L"Explorer", nullptr);
+        SetWindowLongPtrW(field, GWLP_USERDATA, action_index);
+        WNDPROC previous_proc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(field, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(keyboard_binding_field_proc)));
+        if (!keyboard_binding_field_proc_prev) {
+            keyboard_binding_field_proc_prev = previous_proc;
+        }
+        return field;
+    }
+
+    LRESULT CALLBACK keyboard_input_page_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+        switch (message) {
+        case WM_CREATE:
+            input_keyboard_scroll_offset = 0;
+            update_keyboard_page_scrollbar();
+            return 0;
+        case WM_MOUSEWHEEL: {
+            const int wheel_delta = GET_WHEEL_DELTA_WPARAM(wparam);
+            if (wheel_delta != 0) {
+                scroll_keyboard_page_by(-(wheel_delta / WHEEL_DELTA) * 48);
+                return 0;
+            }
+            break;
+        }
+        case WM_VSCROLL: {
+            SCROLLINFO scroll_info{};
+            scroll_info.cbSize = sizeof(scroll_info);
+            scroll_info.fMask = SIF_ALL;
+            GetScrollInfo(hwnd, SB_VERT, &scroll_info);
+
+            int target = input_keyboard_scroll_offset;
+            switch (LOWORD(wparam)) {
+            case SB_LINEUP: target -= 24; break;
+            case SB_LINEDOWN: target += 24; break;
+            case SB_PAGEUP: target -= input_keyboard_view_height; break;
+            case SB_PAGEDOWN: target += input_keyboard_view_height; break;
+            case SB_THUMBPOSITION:
+            case SB_THUMBTRACK: target = scroll_info.nTrackPos; break;
+            case SB_TOP: target = 0; break;
+            case SB_BOTTOM: target = max_keyboard_scroll_offset(); break;
+            default: break;
+            }
+
+            scroll_keyboard_page_to(target);
+            return 0;
+        }
+        case WM_CTLCOLORSTATIC: {
+            HDC dc = reinterpret_cast<HDC>(wparam);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+        }
+        case WM_CTLCOLOREDIT: {
+            HDC dc = reinterpret_cast<HDC>(wparam);
+            SetBkColor(dc, GetSysColor(COLOR_WINDOW));
+            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+        }
+        }
+
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
     std::wstring controller_profile_name(const char* controller_name) {
         std::string lower = controller_name ? controller_name : "";
         std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
@@ -1432,6 +1739,7 @@ namespace {
         combo_select_clamped(input_controller_combo, preferred_selection);
         update_input_profile_label();
 
+        refresh_keyboard_binding_fields();
         CheckDlgButton(input_options_window, static_cast<int>(input_command_apply + 20), input_window_pending_settings.mouse_click_to_move ? BST_CHECKED : BST_UNCHECKED);
     }
 
@@ -1697,6 +2005,19 @@ namespace {
         case WM_CREATE: {
             input_options_window = hwnd;
             EnableThemeDialogTexture(hwnd, ETDT_ENABLETAB);
+            const wchar_t* keyboard_page_class_name = L"PaperMarioReCutKeyboardInputPage";
+            static bool keyboard_page_registered = false;
+            if (!keyboard_page_registered) {
+                WNDCLASSW keyboard_page_class{};
+                keyboard_page_class.lpfnWndProc = keyboard_input_page_proc;
+                keyboard_page_class.hInstance = GetModuleHandleW(nullptr);
+                keyboard_page_class.lpszClassName = keyboard_page_class_name;
+                keyboard_page_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+                keyboard_page_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+                RegisterClassW(&keyboard_page_class);
+                keyboard_page_registered = true;
+            }
+
             input_tab_control = CreateWindowExW(
                 0, WC_TABCONTROLW, nullptr,
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP | TCS_FIXEDWIDTH,
@@ -1715,7 +2036,7 @@ namespace {
             SendMessageW(input_tab_control, TCM_SETITEMSIZE, 0, MAKELPARAM(126, 28));
 
             input_gamepad_page = CreateWindowExW(0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE, 24, 44, 476, 248, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
-            input_keyboard_page = CreateWindowExW(0, L"STATIC", nullptr, WS_CHILD, 24, 44, 476, 248, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+            input_keyboard_page = CreateWindowExW(0, keyboard_page_class_name, nullptr, WS_CHILD | WS_VSCROLL | WS_CLIPCHILDREN, 24, 44, 476, input_keyboard_view_height, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
 
             create_label(input_gamepad_page, L"Controller", 0, 4, 110);
             input_controller_combo = create_combo(input_gamepad_page, input_command_apply + 1, 128, 0, 310);
@@ -1723,7 +2044,13 @@ namespace {
             create_button(input_gamepad_page, L"Apply Automatic Profile", input_command_apply_profile, 128, 64, 180);
             create_button(input_gamepad_page, L"Rebind", input_command_open_gamepad_rebind, 318, 64, 120);
 
-            input_mouse_checkbox = create_checkbox(input_keyboard_page, L"Mouse Click-To-Move", input_command_apply + 20, 0, 14, 220);
+            for (int i = 0; i < input_action_count; i++) {
+                const int y = 8 + (i * 23);
+                input_keyboard_action_labels[i] = create_label(input_keyboard_page, input_actions[i].label, 0, y + 2, 144, 18);
+                input_keyboard_binding_fields[i] = create_keyboard_binding_field(input_keyboard_page, i, 154, y, 230);
+            }
+            input_mouse_checkbox = create_checkbox(input_keyboard_page, L"Mouse Click-To-Move", input_command_apply + 20, 0, 430, 220);
+            scroll_keyboard_page_to(0);
 
             create_button(hwnd, L"Apply", input_command_apply, 326, 318, 88);
             create_button(hwnd, L"Close", input_command_close, 424, 318, 88);
@@ -1741,6 +2068,12 @@ namespace {
             if (reinterpret_cast<NMHDR*>(lparam)->hwndFrom == input_tab_control &&
                 reinterpret_cast<NMHDR*>(lparam)->code == TCN_SELCHANGE) {
                 show_input_page(TabCtrl_GetCurSel(input_tab_control));
+                return 0;
+            }
+            break;
+        case WM_MOUSEWHEEL:
+            if (input_tab_control && input_keyboard_page && TabCtrl_GetCurSel(input_tab_control) == 1) {
+                SendMessageW(input_keyboard_page, message, wparam, lparam);
                 return 0;
             }
             break;
@@ -1777,6 +2110,10 @@ namespace {
             input_controller_combo = nullptr;
             input_profile_label = nullptr;
             input_mouse_checkbox = nullptr;
+            input_keyboard_action_labels.fill(nullptr);
+            input_keyboard_binding_fields.fill(nullptr);
+            input_keyboard_capture_action = -1;
+            input_keyboard_scroll_offset = 0;
             input_window_pending_valid = false;
             return 0;
         }
