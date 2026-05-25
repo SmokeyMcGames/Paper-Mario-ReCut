@@ -8,7 +8,6 @@ This repository does not include ROM files, extracted ROM assets, save files, or
 
 - Press F1 in-game to show or hide the early Windows menu bar for File, Graphics, and Controls.
 - Press F8 in-game to open Texture Replacement. Live Texture Replacement loads edited PNG/DDS files from `textures/replacements/` and hot-reloads them while enabled.
-- Press F10 in-game to show or hide the VI/FPS counter.
 
 Paper Mario ReCut includes a small built-in texture replacement pack compiled into the Windows executable. Those hashes are always loaded and are restored from the exe at startup, even when Live Texture Replacement is disabled.
 

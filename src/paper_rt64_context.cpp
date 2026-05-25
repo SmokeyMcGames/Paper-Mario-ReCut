@@ -407,7 +407,12 @@ namespace {
         }
 
         uint32_t get_display_framerate() const override {
-            return 60;
+            if (!app) {
+                return 60;
+            }
+
+            const uint32_t monitor_rate = app->presentQueue->ext.sharedResources->swapChainRate;
+            return monitor_rate != 0 ? monitor_rate : 60;
         }
 
         uint64_t get_presented_frame_count() const override {

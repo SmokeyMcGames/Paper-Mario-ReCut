@@ -233,10 +233,6 @@ namespace {
     WNDPROC previous_window_proc = nullptr;
     HMENU app_menu_bar = nullptr;
     bool app_menu_bar_visible = false;
-    HWND menu_hint_overlay_window = nullptr;
-    bool menu_hint_overlay_visible = false;
-    HWND fps_overlay_window = nullptr;
-    bool fps_overlay_enabled = false;
     HWND texture_replacement_window = nullptr;
     HWND texture_live_replacement_checkbox = nullptr;
     HWND texture_dump_button = nullptr;
@@ -278,11 +274,6 @@ namespace {
     AppInputSettings input_window_pending_settings = make_default_input_settings();
     bool input_window_pending_valid = false;
     std::chrono::steady_clock::time_point texture_dump_pass_started = std::chrono::steady_clock::now();
-    std::atomic<uint32_t> fps_vi_ticks{0};
-    uint64_t fps_last_presented_frames = 0;
-    std::chrono::steady_clock::time_point fps_last_sample = std::chrono::steady_clock::now();
-    std::chrono::steady_clock::time_point menu_hint_started = std::chrono::steady_clock::now();
-    char fps_overlay_text[64] = "VI --.-\nFPS --.-";
 
     constexpr UINT_PTR menu_command_restart = 40001;
     constexpr UINT_PTR menu_command_save_state = 40002;
@@ -315,18 +306,9 @@ namespace {
     constexpr UINT_PTR gamepad_rebind_command_close = 40601;
     constexpr UINT_PTR gamepad_rebind_combo_base = 40620;
 
-    constexpr uint8_t menu_hint_max_alpha = 220;
     constexpr double texture_dump_pass_seconds = 8.0;
-    constexpr double menu_hint_fade_in_seconds = 0.35;
-    constexpr double menu_hint_hold_seconds = 3.0;
-    constexpr double menu_hint_fade_out_seconds = 0.65;
-    constexpr int menu_hint_overlay_width = 232;
-    constexpr int menu_hint_overlay_height = 42;
-    constexpr int fps_overlay_width = 136;
-    constexpr int fps_overlay_height = 46;
 
     void set_app_menu_bar_visible(bool visible);
-    void hide_menu_hint_overlay();
     void show_texture_replacement_window();
     void show_graphics_options_window();
     void show_audio_options_window();
@@ -428,84 +410,6 @@ namespace {
         return DefWindowProcW(hwnd, message, wparam, lparam);
     }
 
-    LRESULT CALLBACK fps_overlay_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
-        switch (message) {
-        case WM_NCHITTEST:
-            return HTTRANSPARENT;
-        case WM_PAINT: {
-            PAINTSTRUCT paint;
-            HDC dc = BeginPaint(hwnd, &paint);
-            RECT rect{};
-            GetClientRect(hwnd, &rect);
-
-            HBRUSH background = CreateSolidBrush(RGB(0, 0, 0));
-            FillRect(dc, &rect, background);
-            DeleteObject(background);
-
-            SetBkMode(dc, TRANSPARENT);
-            HFONT font = CreateFontA(
-                16, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
-            HFONT old_font = reinterpret_cast<HFONT>(SelectObject(dc, font));
-
-            RECT shadow_rect = rect;
-            OffsetRect(&shadow_rect, 1, 1);
-            SetTextColor(dc, RGB(0, 0, 0));
-            DrawTextA(dc, fps_overlay_text, -1, &shadow_rect, DT_CENTER | DT_VCENTER | DT_NOPREFIX);
-
-            SetTextColor(dc, RGB(255, 255, 255));
-            DrawTextA(dc, fps_overlay_text, -1, &rect, DT_CENTER | DT_VCENTER | DT_NOPREFIX);
-
-            SelectObject(dc, old_font);
-            DeleteObject(font);
-            EndPaint(hwnd, &paint);
-            return 0;
-        }
-        }
-
-        return DefWindowProcW(hwnd, message, wparam, lparam);
-    }
-
-    LRESULT CALLBACK menu_hint_overlay_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
-        switch (message) {
-        case WM_NCHITTEST:
-            return HTTRANSPARENT;
-        case WM_PAINT: {
-            PAINTSTRUCT paint;
-            HDC dc = BeginPaint(hwnd, &paint);
-            RECT rect{};
-            GetClientRect(hwnd, &rect);
-
-            HBRUSH background = CreateSolidBrush(RGB(0, 0, 0));
-            FillRect(dc, &rect, background);
-            DeleteObject(background);
-
-            SetBkMode(dc, TRANSPARENT);
-            HFONT font = CreateFontA(
-                18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
-            HFONT old_font = reinterpret_cast<HFONT>(SelectObject(dc, font));
-
-            RECT shadow_rect = rect;
-            OffsetRect(&shadow_rect, 1, 1);
-            SetTextColor(dc, RGB(0, 0, 0));
-            DrawTextA(dc, "Press F1 For Menu", -1, &shadow_rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-
-            SetTextColor(dc, RGB(255, 255, 255));
-            DrawTextA(dc, "Press F1 For Menu", -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-
-            SelectObject(dc, old_font);
-            DeleteObject(font);
-            EndPaint(hwnd, &paint);
-            return 0;
-        }
-        }
-
-        return DefWindowProcW(hwnd, message, wparam, lparam);
-    }
-
     void install_app_window_proc() {
         if (!main_window || previous_window_proc) {
             return;
@@ -561,7 +465,6 @@ namespace {
 
     void toggle_app_menu_bar() {
         set_app_menu_bar_visible(!app_menu_bar_visible);
-        hide_menu_hint_overlay();
     }
 
     void destroy_app_menu_bar() {
@@ -2287,223 +2190,6 @@ namespace {
         texture_status_label = nullptr;
     }
 
-    void ensure_menu_hint_overlay_window() {
-        if (menu_hint_overlay_window || !main_window) {
-            return;
-        }
-
-        const wchar_t* class_name = L"PaperMarioReCutMenuHintOverlay";
-        static bool registered = false;
-        if (!registered) {
-            WNDCLASSW window_class{};
-            window_class.lpfnWndProc = menu_hint_overlay_proc;
-            window_class.hInstance = GetModuleHandleW(nullptr);
-            window_class.lpszClassName = class_name;
-            window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
-            RegisterClassW(&window_class);
-            registered = true;
-        }
-
-        menu_hint_overlay_window = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-            class_name, L"", WS_POPUP, 0, 0, menu_hint_overlay_width, menu_hint_overlay_height,
-            main_window, nullptr, GetModuleHandleW(nullptr), nullptr);
-
-        if (menu_hint_overlay_window) {
-            SetLayeredWindowAttributes(menu_hint_overlay_window, 0, 0, LWA_ALPHA);
-        }
-    }
-
-    uint8_t menu_hint_alpha_for_elapsed(double elapsed_seconds) {
-        if (elapsed_seconds < menu_hint_fade_in_seconds) {
-            const double progress = std::clamp(elapsed_seconds / menu_hint_fade_in_seconds, 0.0, 1.0);
-            return static_cast<uint8_t>(menu_hint_max_alpha * progress);
-        }
-
-        if (elapsed_seconds < menu_hint_hold_seconds) {
-            return menu_hint_max_alpha;
-        }
-
-        const double fade_out_elapsed = elapsed_seconds - menu_hint_hold_seconds;
-        if (fade_out_elapsed < menu_hint_fade_out_seconds) {
-            const double progress = std::clamp(fade_out_elapsed / menu_hint_fade_out_seconds, 0.0, 1.0);
-            return static_cast<uint8_t>(menu_hint_max_alpha * (1.0 - progress));
-        }
-
-        return 0;
-    }
-
-    void set_menu_hint_overlay_alpha(uint8_t alpha) {
-        if (menu_hint_overlay_window) {
-            SetLayeredWindowAttributes(menu_hint_overlay_window, 0, alpha, LWA_ALPHA);
-        }
-    }
-
-    void position_menu_hint_overlay() {
-        if (!menu_hint_overlay_window || !main_window) {
-            return;
-        }
-
-        RECT client_rect{};
-        POINT client_origin{0, 0};
-        if (!GetClientRect(main_window, &client_rect) || !ClientToScreen(main_window, &client_origin)) {
-            return;
-        }
-
-        const int client_width = client_rect.right - client_rect.left;
-        const int x = client_origin.x + std::max(8, (client_width - menu_hint_overlay_width) / 2);
-        const int y = client_origin.y + 18;
-        SetWindowPos(
-            menu_hint_overlay_window, HWND_TOPMOST,
-            x, y,
-            menu_hint_overlay_width, menu_hint_overlay_height,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    }
-
-    void show_menu_hint_overlay() {
-        menu_hint_overlay_visible = true;
-        menu_hint_started = std::chrono::steady_clock::now();
-        ensure_menu_hint_overlay_window();
-        position_menu_hint_overlay();
-        if (menu_hint_overlay_window) {
-            set_menu_hint_overlay_alpha(0);
-            ShowWindow(menu_hint_overlay_window, SW_SHOWNOACTIVATE);
-            InvalidateRect(menu_hint_overlay_window, nullptr, FALSE);
-        }
-    }
-
-    void hide_menu_hint_overlay() {
-        menu_hint_overlay_visible = false;
-        if (menu_hint_overlay_window) {
-            ShowWindow(menu_hint_overlay_window, SW_HIDE);
-        }
-    }
-
-    void update_menu_hint_overlay() {
-        if (!menu_hint_overlay_visible) {
-            return;
-        }
-
-        const auto now = std::chrono::steady_clock::now();
-        const double elapsed_seconds = std::chrono::duration<double>(now - menu_hint_started).count();
-        const uint8_t alpha = menu_hint_alpha_for_elapsed(elapsed_seconds);
-        if (alpha == 0 && elapsed_seconds >= menu_hint_hold_seconds + menu_hint_fade_out_seconds) {
-            hide_menu_hint_overlay();
-            return;
-        }
-
-        ensure_menu_hint_overlay_window();
-        position_menu_hint_overlay();
-        set_menu_hint_overlay_alpha(alpha);
-    }
-
-    void destroy_menu_hint_overlay() {
-        if (menu_hint_overlay_window) {
-            DestroyWindow(menu_hint_overlay_window);
-            menu_hint_overlay_window = nullptr;
-        }
-        menu_hint_overlay_visible = false;
-    }
-
-    void ensure_fps_overlay_window() {
-        if (fps_overlay_window || !main_window) {
-            return;
-        }
-
-        const wchar_t* class_name = L"PaperMarioReCutFpsOverlay";
-        static bool registered = false;
-        if (!registered) {
-            WNDCLASSW window_class{};
-            window_class.lpfnWndProc = fps_overlay_proc;
-            window_class.hInstance = GetModuleHandleW(nullptr);
-            window_class.lpszClassName = class_name;
-            window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
-            RegisterClassW(&window_class);
-            registered = true;
-        }
-
-        fps_overlay_window = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-            class_name, L"", WS_POPUP, 0, 0, fps_overlay_width, fps_overlay_height,
-            main_window, nullptr, GetModuleHandleW(nullptr), nullptr);
-
-        if (fps_overlay_window) {
-            SetLayeredWindowAttributes(fps_overlay_window, 0, 210, LWA_ALPHA);
-        }
-    }
-
-    void position_fps_overlay() {
-        if (!fps_overlay_window || !main_window) {
-            return;
-        }
-
-        RECT client_rect{};
-        POINT client_origin{0, 0};
-        if (!GetClientRect(main_window, &client_rect) || !ClientToScreen(main_window, &client_origin)) {
-            return;
-        }
-
-        SetWindowPos(
-            fps_overlay_window, HWND_TOPMOST,
-            client_origin.x + 8, client_origin.y + 8,
-            fps_overlay_width, fps_overlay_height,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    }
-
-    void set_fps_overlay_enabled(bool enabled) {
-        fps_overlay_enabled = enabled;
-
-        if (enabled) {
-            fps_vi_ticks.store(0, std::memory_order_relaxed);
-            fps_last_presented_frames = ultramodern::get_presented_frame_count();
-            fps_last_sample = std::chrono::steady_clock::now();
-            std::snprintf(fps_overlay_text, sizeof(fps_overlay_text), "VI --.-\nFPS --.-");
-            ensure_fps_overlay_window();
-            position_fps_overlay();
-            if (fps_overlay_window) {
-                ShowWindow(fps_overlay_window, SW_SHOWNOACTIVATE);
-                InvalidateRect(fps_overlay_window, nullptr, FALSE);
-            }
-        }
-        else if (fps_overlay_window) {
-            ShowWindow(fps_overlay_window, SW_HIDE);
-        }
-    }
-
-    void update_fps_overlay() {
-        if (!fps_overlay_enabled) {
-            return;
-        }
-
-        ensure_fps_overlay_window();
-        position_fps_overlay();
-
-        auto now = std::chrono::steady_clock::now();
-        double elapsed_seconds = std::chrono::duration<double>(now - fps_last_sample).count();
-        if (elapsed_seconds < 0.5) {
-            return;
-        }
-
-        uint32_t vi_frames = fps_vi_ticks.exchange(0, std::memory_order_relaxed);
-        uint64_t presented_frames = ultramodern::get_presented_frame_count();
-        uint64_t presented_delta = presented_frames - fps_last_presented_frames;
-        double vi_fps = vi_frames / elapsed_seconds;
-        double present_fps = presented_delta / elapsed_seconds;
-        fps_last_presented_frames = presented_frames;
-        fps_last_sample = now;
-        std::snprintf(fps_overlay_text, sizeof(fps_overlay_text), "VI %4.1f\nFPS %4.1f", vi_fps, present_fps);
-
-        if (fps_overlay_window) {
-            InvalidateRect(fps_overlay_window, nullptr, FALSE);
-        }
-    }
-
-    void destroy_fps_overlay() {
-        if (fps_overlay_window) {
-            DestroyWindow(fps_overlay_window);
-            fps_overlay_window = nullptr;
-        }
-    }
 #endif
 
     void show_message(const char* msg) {
@@ -2631,7 +2317,6 @@ namespace {
         main_window = wm_info.info.win.window;
         install_app_window_proc();
         set_app_menu_bar_visible(false);
-        show_menu_hint_overlay();
         return ultramodern::renderer::WindowHandle{ main_window, GetCurrentThreadId() };
 #elif defined(__linux__) || defined(__ANDROID__)
         return window;
@@ -2664,7 +2349,6 @@ namespace {
         static bool f1_was_down = false;
         static bool f2_was_down = false;
         static bool f8_was_down = false;
-        static bool f10_was_down = false;
         const bool foreground = GetForegroundWindow() == main_window;
         bool f1_down = foreground && (GetAsyncKeyState(VK_F1) & 0x8000) != 0;
         if (f1_down && !f1_was_down) {
@@ -2684,13 +2368,6 @@ namespace {
         }
         f8_was_down = f8_down;
 
-        bool f10_down = foreground && (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
-        if (f10_down && !f10_was_down) {
-            set_fps_overlay_enabled(!fps_overlay_enabled);
-        }
-        f10_was_down = f10_down;
-        update_menu_hint_overlay();
-        update_fps_overlay();
         refresh_texture_replacement_window();
 #endif
     }
@@ -3337,12 +3014,6 @@ namespace {
 #endif
     }
 
-    void fps_vi_callback() {
-#ifdef _WIN32
-        fps_vi_ticks.fetch_add(1, std::memory_order_relaxed);
-#endif
-    }
-
 #ifdef _WIN32
     void print_symbol(HANDLE process, DWORD64 address) {
         char storage[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
@@ -3457,7 +3128,7 @@ int main(int argc, char** argv) {
     };
 
     ultramodern::events::callbacks_t events_callbacks{
-        .vi_callback = fps_vi_callback,
+        .vi_callback = nullptr,
         .gfx_init_callback = nullptr,
     };
     ultramodern::error_handling::callbacks_t error_callbacks{
@@ -3502,8 +3173,6 @@ int main(int argc, char** argv) {
     destroy_audio_options_window();
     destroy_graphics_options_window();
     destroy_texture_replacement_window();
-    destroy_menu_hint_overlay();
-    destroy_fps_overlay();
     destroy_app_menu_bar();
 #endif
     SDL_Quit();
