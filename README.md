@@ -52,6 +52,7 @@ user/AtlasEditing/
 Do not commit or distribute ROMs, save files, generated ROM output, local dumps, local replacements, or `user` folders.
 
 ## Paper Atlas Tool
+<img width="1296" height="1058" alt="image" src="https://github.com/user-attachments/assets/fb50c23f-0cfe-470d-a20a-65d06c213a23" />
 
 Paper Atlas Tool is included as a means for simple texture replacement and as it evolves will change the way Paper Mario will be experienced making texture modding very simple.
 
