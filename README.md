@@ -8,6 +8,7 @@ This repository does not include ROM files, extracted ROM assets, save files, or
 
 ## Features
 
+- PRESS F1 TO ACCESS THE MENU (Might change to ESC not sure yet lol)
 - First-run legal ROM setup with local validation.
 - Windowed RT64 renderer integration.
 - Graphics options menu with live-applying renderer settings.
