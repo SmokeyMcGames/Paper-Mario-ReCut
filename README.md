@@ -32,6 +32,8 @@ Save states are implemented as an early runtime snapshot system. Slot saves and 
 3. Smartscreen is false positive until the app becomes signed. I have even submitted the exe for evaluation from microsoft with the response being just give it time for trust to be built. 
 I apologize for any fear of the situation.
 
+
+
 ## Runtime Folders
 
 Local runtime data lives under:
