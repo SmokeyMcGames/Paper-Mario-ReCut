@@ -25,7 +25,7 @@ This is still an early working build. The game boots and the tooling is actively
 
 Save states are implemented as an early runtime snapshot system. Slot saves and loads are queued onto Paper Mario's main game-loop boundary and store slots in `user/states/`. Treat them as testable while the runtime continues to mature. 
 
-Known issues:
+### Known issues:
 1. Widescreen is currently broken, but it is still exposed for testing. Expect visual problems if you enable it. The normal 4:3 path is the intended play path for now.
 2. Using Save States in it's current implementation will break the game. Avoid For Now.
 3. Smartscreen is false positive until the app becomes signed. I have even submitted the exe for evaluation from microsoft with the response being just give it time for trust to be built. 
