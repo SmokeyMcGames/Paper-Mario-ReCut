@@ -8,35 +8,28 @@ This repository does not include ROM files, extracted ROM assets, save files, or
 
 ## Features
 
-- Native Windows executable for Paper Mario ReCut.
 - First-run legal ROM setup with local validation.
 - Windowed RT64 renderer integration.
-- Windows menu bar toggled with F1.
-- File menu with exit/restart and Save State / Load State submenus for slots 1-5.
 - Graphics options menu with live-applying renderer settings.
-- Texture Replacement window toggled with F8.
-- Live Texture Replacement toggle, also available with F2.
+- Live Texture Replacement toggle via F2.
 - One-shot texture dumping with an in-window percentage and dump count.
 - Continuous Dump mode for capturing newly created textures while the game keeps running.
-- Texture dumping skips PNG v5 assets that are already present in the dump folder.
-- Built-in ReCut texture pack embedded in the executable.
-- Editable Paper Atlas Tool sidecar built from source in this repo.
-- Paper Atlas auto-selects `user/textures/dumps` and `user/textures/replacements` when launched beside the game.
-- Paper Atlas saves combined atlas work to `user/AtlasEditing` so dump folders stay clean.
-- Paper Atlas can group pieces by similar resolution to make preview cleanup easier.
+- Paper Atlas Tool sidecar built for easy texture replacement and editing.
 - Controller and keyboard configuration windows are present and still being expanded.
 
 NOTE: The current Gamepad Implementaion will auto bind controls to known SDL controllers and the rebind system is currently in the works.
 
 ## Current Status
 
-This is still an early working build. The game boots and the tooling is actively being shaped around Paper Mario rather than Zelda Recompiled.
+This is still an early working build. The game boots and the tooling is actively being shaped around Paper Mario as development continues.
 
 Save states are implemented as an early runtime snapshot system. Slot saves and loads are queued onto Paper Mario's main game-loop boundary and store slots in `user/states/`. Treat them as testable while the runtime continues to mature. 
 
 CAUTION: Using Save States in it's current implementation will break the game. Avoid For Now.
 
-Known issue: widescreen is currently broken, but it is still exposed for testing. Expect visual problems if you enable it. The normal 4:3 path is the intended play path for now.
+Known issue: widescreen is currently broken, but it is still exposed for testing. Expect visual problems if you enable it. The normal 4:3 path is the intended play path for now. 
+Smartscreen is false positive until the app becomes signed. I have even submitted the exe for evaluation from microsoft with the response being just give it time for trust to be built. 
+I apologize for any fear of the situation.
 
 ## Runtime Folders
 
@@ -60,7 +53,7 @@ Do not commit or distribute ROMs, save files, generated ROM output, local dumps,
 
 ## Paper Atlas Tool
 
-Paper Atlas Tool is included as editable C# WinForms source at:
+Paper Atlas Tool is included as a means for simple texture replacement and as it evolves will change the way Paper Mario will be experienced making texture modding very simple.
 
 ```text
 tools/PaperAtlasTool/
