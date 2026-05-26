@@ -56,7 +56,7 @@ Do not commit or distribute ROMs, save files, generated ROM output, local dumps,
 <img width="1296" height="1058" alt="image" src="https://github.com/user-attachments/assets/fb50c23f-0cfe-470d-a20a-65d06c213a23" />
 
 Paper Atlas Tool is included as a means for simple texture replacement and as it evolves will change the way Paper Mario will be experienced making texture modding very simple.
-I originally was working on this tool for texture replacement for any N64 texture set but have repurposed it just for this.
+I originally was working on this tool for texture replacement for any N64 texture set but have repurposed it just for this and still has a lot of work to be done.
 
 ```text
 tools/PaperAtlasTool/
