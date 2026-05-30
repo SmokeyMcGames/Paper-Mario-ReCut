@@ -14,6 +14,8 @@ user/
 
 # Generated from a user-provided ROM. Keep local, never publish.
 generated/paper_mario_recomp_out/
+/n_aspMain.toml
+/rsp/*.toml
 
 # Never commit ROMs or cartridge save data.
 *.z64
