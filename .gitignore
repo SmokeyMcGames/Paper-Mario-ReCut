@@ -16,6 +16,7 @@ user/
 generated/paper_mario_recomp_out/
 /n_aspMain.toml
 /rsp/*.toml
+/rsp/n_aspMain.cpp
 
 # Never commit ROMs or cartridge save data.
 *.z64

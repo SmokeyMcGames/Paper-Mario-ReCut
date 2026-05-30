@@ -9,7 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(PAPER_RECOMP_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib")
 set(PM_RECOMP_OUT "${CMAKE_CURRENT_SOURCE_DIR}/generated/paper_mario_recomp_out")
-set(PAPER_MARIO_ROM_PATH "" CACHE FILEPATH "Optional path to a legally dumped Paper Mario (U) ROM for local generated build artifacts")
+set(PAPER_MARIO_ROM_PATH "" CACHE FILEPATH "Path to a legally dumped Paper Mario (U) ROM for local generated build artifacts")
 
 if (NOT EXISTS "${PM_RECOMP_OUT}/lookup.cpp")
     message(FATAL_ERROR
@@ -53,17 +53,22 @@ target_include_directories(RecompiledFuncs PRIVATE
     "${PAPER_RECOMP_LIB_DIR}/N64ModernRuntime/N64Recomp/include"
 )
 
-set(PM_RSP_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/rsp/n_aspMain.cpp")
-if (PAPER_MARIO_ROM_PATH)
-    set(PM_GENERATED_RSP_DIR "${CMAKE_BINARY_DIR}/generated_rsp")
-    set(PM_GENERATED_RSP_CONFIG "${PM_GENERATED_RSP_DIR}/n_aspMain.toml")
-    set(PM_RSP_SOURCE "${PM_GENERATED_RSP_DIR}/n_aspMain.cpp")
-    file(MAKE_DIRECTORY "${PM_GENERATED_RSP_DIR}")
-    string(REPLACE "\\" "/" PM_RSP_ROM_FILE_PATH "${PAPER_MARIO_ROM_PATH}")
-    string(REPLACE "\"" "\\\"" PM_RSP_ROM_FILE_PATH "${PM_RSP_ROM_FILE_PATH}")
-    string(REPLACE "\\" "/" PM_RSP_OUTPUT_FILE_PATH "${PM_RSP_SOURCE}")
-    string(REPLACE "\"" "\\\"" PM_RSP_OUTPUT_FILE_PATH "${PM_RSP_OUTPUT_FILE_PATH}")
-    file(GENERATE OUTPUT "${PM_GENERATED_RSP_CONFIG}" CONTENT
+if (NOT PAPER_MARIO_ROM_PATH)
+    message(FATAL_ERROR
+        "Missing PAPER_MARIO_ROM_PATH. Configure with "
+        "-DPAPER_MARIO_ROM_PATH=/path/to/your/legally/dumped/PaperMarioUS.z64 "
+        "so the RSP microcode source can be generated locally.")
+endif()
+
+set(PM_GENERATED_RSP_DIR "${CMAKE_BINARY_DIR}/generated_rsp")
+set(PM_GENERATED_RSP_CONFIG "${PM_GENERATED_RSP_DIR}/n_aspMain.toml")
+set(PM_RSP_SOURCE "${PM_GENERATED_RSP_DIR}/n_aspMain.cpp")
+file(MAKE_DIRECTORY "${PM_GENERATED_RSP_DIR}")
+string(REPLACE "\\" "/" PM_RSP_ROM_FILE_PATH "${PAPER_MARIO_ROM_PATH}")
+string(REPLACE "\"" "\\\"" PM_RSP_ROM_FILE_PATH "${PM_RSP_ROM_FILE_PATH}")
+string(REPLACE "\\" "/" PM_RSP_OUTPUT_FILE_PATH "${PM_RSP_SOURCE}")
+string(REPLACE "\"" "\\\"" PM_RSP_OUTPUT_FILE_PATH "${PM_RSP_OUTPUT_FILE_PATH}")
+file(GENERATE OUTPUT "${PM_GENERATED_RSP_CONFIG}" CONTENT
 "text_offset = 0x4E5A0
 text_size = 0xC60
 text_address = 0x04001000
@@ -75,13 +80,13 @@ extra_indirect_branch_targets = [
     0x1348, 0x1248, 0x12D4, 0x12B0, 0x1384
 ]
 ")
-    add_custom_command(
-        OUTPUT "${PM_RSP_SOURCE}"
-        COMMAND RSPRecomp "${PM_GENERATED_RSP_CONFIG}"
-        DEPENDS RSPRecomp "${PAPER_MARIO_ROM_PATH}"
-        COMMENT "Generating Paper Mario RSP microcode from local ROM"
-        VERBATIM)
-endif()
+add_custom_command(
+    OUTPUT "${PM_RSP_SOURCE}"
+    COMMAND $<TARGET_FILE:RSPRecomp> "${PM_GENERATED_RSP_CONFIG}"
+    DEPENDS RSPRecomp "${PAPER_MARIO_ROM_PATH}"
+    COMMENT "Generating Paper Mario RSP microcode from local ROM"
+    VERBATIM)
+set_source_files_properties("${PM_RSP_SOURCE}" PROPERTIES GENERATED TRUE)
 
 add_executable(PaperMarioReCut
     src/builtin_texture_pack.cpp

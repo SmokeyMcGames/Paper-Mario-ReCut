@@ -74,7 +74,7 @@ This source tree expects generated Paper Mario recomp output at:
 generated/paper_mario_recomp_out/
 ```
 
-That folder is intentionally not committed. Generate it locally from your own legal ROM before configuring CMake.
+That folder is intentionally not committed. The RSP microcode source is also generated locally into the build directory. Generate the recomp output from your own legal ROM before configuring CMake, then pass that same ROM path as `PAPER_MARIO_ROM_PATH`.
 
 Requirements:
 
@@ -85,7 +85,7 @@ Requirements:
 Build:
 
 ```powershell
-cmake -S . -B build-recut -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build-recut -G "Visual Studio 17 2022" -A x64 -DPAPER_MARIO_ROM_PATH="D:\path\to\Paper Mario (U).z64"
 cmake --build build-recut --config Release
 ```
 
